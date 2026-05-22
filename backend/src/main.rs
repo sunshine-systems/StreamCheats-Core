@@ -96,6 +96,7 @@ mod http;
 mod kmbox_net;
 mod services;
 mod streamcheats;
+mod updater;
 mod util;
 
 use std::env;
@@ -736,6 +737,10 @@ fn run(
         None => http::state::LogDropCounter::zero(),
     };
     let http_log_dir = logs_dir_for_http.clone().unwrap_or_else(|| settings.data_dir.join("logs"));
+    // In-app updater. Polls GitHub releases on a 6h cadence and
+    // exposes status to the UI via `/api/updates/*`. The Arc lives in
+    // AppState; the poller task is spawned inside the HTTP runtime.
+    let updater_handle = Arc::new(crate::updater::Updater::new(settings.experimental_builds));
     let http_state_template = http::state::AppState {
         device: device.clone(),
         peer_registry: monitor_registry.clone(),
@@ -749,6 +754,8 @@ fn run(
         file_log_drops: log_drops_for_http,
         started_at,
         log_stream: Some(log_stream_handles),
+        updater: updater_handle.clone(),
+        running: running.clone(),
     };
     let http_handle = http::spawn_http_server(http_state_template, running.clone());
     if let Some((_, bound)) = &http_handle {

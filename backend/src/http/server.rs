@@ -21,6 +21,7 @@ use tracing::{error, info, warn};
 
 use crate::http::routes::build_router;
 use crate::http::state::AppState;
+use crate::updater;
 use crate::util::daemon;
 
 /// Cadence at which the graceful-shutdown future polls `running`. Kept
@@ -79,6 +80,15 @@ pub fn spawn_http_server(
     } else {
         info!("http: pid={} http_port={}", std::process::id(), bound.port());
     }
+
+    // Spawn the background updater poller inside the HTTP runtime so
+    // it shares the same reactor as the route handlers (they all read
+    // the same `Arc<Updater>` state mutex). Done before `axum::serve`
+    // so the first check kicks off as soon as the runtime is live.
+    let updater_handle = state_template.updater.clone();
+    runtime.spawn(async move {
+        updater::spawn_poller(updater_handle);
+    });
 
     let router = build_router(state_template);
 

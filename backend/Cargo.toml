@@ -84,8 +84,26 @@ socket2 = { version = "0.5", features = ["all"] }
 # routes. `fs` feature is the only one we need. Pinned to 0.5 to
 # match axum 0.7's tower-service / http 1.x ecosystem.
 tower-http = { version = "0.5", features = ["fs"] }
+# reqwest — HTTP client for the GitHub Releases polling updater. Pinned
+# to rustls-tls so the build doesn't drag in OpenSSL on Windows. `json`
+# gives us `.json::<T>()` and `stream` gives us chunked download bodies
+# for the installer progress reporting.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream"] }
+# semver — parse + compare release version strings ("0.6.2",
+# "0.7.0-nightly.20260522"). The updater treats pre-release tags
+# starting with `nightly` as the experimental channel.
+semver = "1"
+# sha2 — SHA-256 of the downloaded installer body, captured for the
+# future signed-release work. We compute it during the stream-to-disk
+# pass so there's no second read.
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
+# winreg — reads the installed-version DisplayVersion off the NSIS
+# uninstall registry key so the updater can compare on-disk version to
+# the latest GitHub release. Windows-only by definition (the installer
+# itself only ships for Windows today).
+winreg = "0.52"
 enable-ansi-support = "0.2"
 
 [target.'cfg(windows)'.build-dependencies]

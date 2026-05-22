@@ -10,6 +10,7 @@ use std::time::Instant;
 use crate::kmbox_net::monitor::PeerRegistry;
 use crate::services::log_stream::LogStreamHandles;
 use crate::streamcheats::DeviceController;
+use crate::updater::Updater;
 
 /// Adapter so the HTTP layer can read the file-logger drop counter
 /// without depending on `tracing-appender`'s `ErrorCounter` type. Built
@@ -84,4 +85,14 @@ pub struct AppState {
     /// stream live events. `None` when log streaming wasn't wired up
     /// (currently only possible in tests).
     pub log_stream: Option<LogStreamHandles>,
+    /// In-app updater state. Polled in the background by a tokio task
+    /// spawned alongside the HTTP server; exposed to the UI via the
+    /// `/api/updates/*` routes and the
+    /// `/api/settings/experimental_builds` toggle.
+    pub updater: Arc<Updater>,
+    /// Flag the daemon's main loop polls. When the updater handler for
+    /// `/api/updates/install` flips it, the daemon exits cleanly so the
+    /// installer can replace files on disk. Same shape as the global
+    /// Ctrl+C `running` AtomicBool — the updater handler stores `false`.
+    pub running: Arc<std::sync::atomic::AtomicBool>,
 }

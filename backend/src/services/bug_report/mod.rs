@@ -198,6 +198,8 @@ mod tests {
             file_log_drops: LogDropCounter::zero(),
             started_at: Instant::now(),
             log_stream: None,
+            updater: Arc::new(crate::updater::Updater::new(false)),
+            running: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 

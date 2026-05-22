@@ -13,6 +13,7 @@
 pub mod bug_report;
 pub mod health;
 pub mod log_stream;
+pub mod updates;
 
 use std::path::{Path, PathBuf};
 
@@ -67,6 +68,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/health", get(health::handler))
         .route("/bug-report", post(bug_report::handler))
         .route("/logs/stream", get(log_stream::handler))
+        .route("/api/updates/status", get(updates::status))
+        .route("/api/updates/check", post(updates::check))
+        .route("/api/updates/download", post(updates::download))
+        .route("/api/updates/install", post(updates::install))
+        .route(
+            "/api/settings/experimental_builds",
+            post(updates::set_experimental),
+        )
         .with_state(state);
 
     match resolve_frontend_dir() {

@@ -4,5 +4,6 @@
   "device_mac": "01FBC068",
   "enable_timing_logs": false,
   "data_dir": "",
-  "enable_file_logging": true
+  "enable_file_logging": true,
+  "experimental_builds": false
 }

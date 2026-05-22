@@ -46,6 +46,14 @@ struct RawSettings {
     /// lossy mode — see `init_logging` for the contract.
     #[serde(default)]
     pub enable_file_logging: Option<bool>,
+    /// Opt-in to nightly / experimental update channel. When `false`
+    /// (default) the in-app updater only surfaces stable `vX.Y.Z`
+    /// releases. When `true` it additionally considers nightly
+    /// pre-releases (`vX.Y.Z-nightly.YYYYMMDD[.N]`). Persisted back
+    /// here via [`set_experimental_builds`] when the user toggles the
+    /// setting from the UI.
+    #[serde(default)]
+    pub experimental_builds: Option<bool>,
 }
 
 /// Validated runtime configuration. Produced by [`load_or_create`] on a
@@ -80,10 +88,16 @@ pub struct Settings {
     /// disk. Users who want zero on-disk files can set this to `false`
     /// in `config.json`.
     pub enable_file_logging: bool,
+    /// Opt-in flag for the in-app updater's nightly channel. Defaults
+    /// to `false`. Mirrored at runtime in
+    /// [`crate::updater::Updater::experimental`] and persisted back
+    /// here via [`set_experimental_builds`] when the user toggles the
+    /// setting from the UI.
+    pub experimental_builds: bool,
 }
 
 fn default_json() -> &'static str {
-    "{\n  \"listen_addr\": \"127.0.0.1\",\n  \"udp_port\": 8888,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false,\n  \"data_dir\": \"\",\n  \"enable_file_logging\": true\n}\n"
+    "{\n  \"listen_addr\": \"127.0.0.1\",\n  \"udp_port\": 8888,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false,\n  \"data_dir\": \"\",\n  \"enable_file_logging\": true,\n  \"experimental_builds\": false\n}\n"
 }
 
 /// Resolve the effective data directory. An explicit non-empty
@@ -152,7 +166,37 @@ fn validate(raw: RawSettings) -> Result<Settings> {
         // serial/UDP paths. Users opt OUT via an explicit `false` in
         // config.json if they want zero on-disk files.
         enable_file_logging: raw.enable_file_logging.unwrap_or(true),
+        experimental_builds: raw.experimental_builds.unwrap_or(false),
     })
+}
+
+/// Read the current `config.json` (best-effort) and re-write it with
+/// `experimental_builds` set to `enabled`. Other fields are preserved
+/// exactly as they are on disk so the user's hand-edited values (e.g.
+/// custom `device_mac`) aren't disturbed. Used by the
+/// `POST /api/settings/experimental_builds` HTTP route.
+///
+/// On an unparseable / unreadable existing file we re-write a minimal
+/// JSON document with just the toggle — the next daemon startup will
+/// re-flesh-out the defaults via [`load_or_create`].
+pub fn set_experimental_builds(dir: &Path, enabled: bool) -> Result<()> {
+    let path = dir.join(CONFIG_FILENAME);
+    let mut value: serde_json::Value = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("config.json is not a JSON object"))?;
+    obj.insert(
+        "experimental_builds".into(),
+        serde_json::Value::Bool(enabled),
+    );
+    let serialised =
+        serde_json::to_string_pretty(&value).context("serialising updated config.json")?;
+    fs::write(&path, format!("{}\n", serialised))
+        .with_context(|| format!("writing updated config to {}", path.display()))?;
+    Ok(())
 }
 
 /// Three-way result of [`load_or_create`]. Encodes whether the caller
@@ -267,6 +311,7 @@ mod tests {
             enable_timing_logs: None,
             data_dir: None,
             enable_file_logging: None,
+            experimental_builds: None,
         };
         assert!(validate(raw).is_err());
     }
@@ -280,6 +325,7 @@ mod tests {
             enable_timing_logs: None,
             data_dir: None,
             enable_file_logging: None,
+            experimental_builds: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.udp_port, DEFAULT_UDP_PORT);
@@ -298,6 +344,7 @@ mod tests {
             enable_timing_logs: Some(true),
             data_dir: None,
             enable_file_logging: None,
+            experimental_builds: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_timing_logs);
@@ -316,6 +363,7 @@ mod tests {
             enable_timing_logs: None,
             data_dir: None,
             enable_file_logging: None,
+            experimental_builds: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_file_logging);
@@ -333,6 +381,7 @@ mod tests {
             enable_timing_logs: None,
             data_dir: None,
             enable_file_logging: Some(false),
+            experimental_builds: None,
         };
         let s = validate(raw).unwrap();
         assert!(!s.enable_file_logging);
@@ -347,10 +396,78 @@ mod tests {
             enable_timing_logs: None,
             data_dir: Some("C:/tmp/streamcheats-test".into()),
             enable_file_logging: Some(true),
+            experimental_builds: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.data_dir, PathBuf::from("C:/tmp/streamcheats-test"));
         assert!(s.enable_file_logging);
+    }
+
+    #[test]
+    fn experimental_builds_defaults_off_and_can_opt_in() {
+        let raw = RawSettings {
+            listen_addr: "127.0.0.1".into(),
+            udp_port: None,
+            device_mac: None,
+            enable_timing_logs: None,
+            data_dir: None,
+            enable_file_logging: None,
+            experimental_builds: None,
+        };
+        assert!(!validate(raw).unwrap().experimental_builds);
+
+        let raw_on = RawSettings {
+            listen_addr: "127.0.0.1".into(),
+            udp_port: None,
+            device_mac: None,
+            enable_timing_logs: None,
+            data_dir: None,
+            enable_file_logging: None,
+            experimental_builds: Some(true),
+        };
+        assert!(validate(raw_on).unwrap().experimental_builds);
+    }
+
+    #[test]
+    fn set_experimental_builds_round_trips() {
+        // Round-trip the toggle through disk, verify the value persists
+        // AND that other fields aren't dropped by the rewrite.
+        let dir = std::env::temp_dir().join(format!(
+            "streamcheats-settings-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(CONFIG_FILENAME);
+        fs::write(
+            &path,
+            r#"{
+              "listen_addr": "127.0.0.1",
+              "udp_port": 8888,
+              "device_mac": "01FBC068",
+              "enable_timing_logs": false,
+              "data_dir": "",
+              "enable_file_logging": true,
+              "experimental_builds": false
+            }"#,
+        )
+        .unwrap();
+
+        set_experimental_builds(&dir, true).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(parsed["experimental_builds"], serde_json::Value::Bool(true));
+        // Other fields preserved.
+        assert_eq!(parsed["device_mac"], serde_json::Value::String("01FBC068".into()));
+        assert_eq!(parsed["udp_port"], serde_json::Value::Number(8888.into()));
+
+        // And we can flip it back.
+        set_experimental_builds(&dir, false).unwrap();
+        let after = fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
+        assert_eq!(parsed["experimental_builds"], serde_json::Value::Bool(false));
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

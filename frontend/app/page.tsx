@@ -10,6 +10,8 @@ import AppHeader from "../components/AppHeader";
 import BugReportButton from "../components/BugReportButton";
 import LogPreview from "../components/LogPreview";
 import StatusRail from "../components/StatusRail";
+import UpdateBanner from "../components/UpdateBanner";
+import UpdateSettings from "../components/UpdateSettings";
 import { useHealthDetail } from "../lib/hooks/useHealthDetail";
 
 export default function Home() {
@@ -28,6 +30,7 @@ export default function Home() {
     >
       <AppHeader version={detail?.version ?? null} />
       <div className="kx-diag-rule" aria-hidden="true" />
+      <UpdateBanner />
 
       <main
         style={{
@@ -49,6 +52,7 @@ export default function Home() {
           }}
         >
           <CtaCard />
+          <UpdateSettings />
           <LogPreview />
         </section>
       </main>
