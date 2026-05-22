@@ -1,0 +1,217 @@
+name: Release (stable)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver bump to apply to current version
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release-stable
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish stable release
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: |
+            electron/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Install cargo-edit (for set-version)
+        shell: pwsh
+        run: cargo install cargo-edit --locked
+
+      - name: Read current version & compute new version
+        id: ver
+        shell: pwsh
+        run: |
+          $cargoToml = Get-Content backend/Cargo.toml -Raw
+          if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') {
+            Write-Error "Could not parse version from backend/Cargo.toml"
+            exit 1
+          }
+          $current = $Matches[1]
+          Write-Host "Current version: $current"
+          $parts = $current.Split('-')[0].Split('.')
+          if ($parts.Count -ne 3) { Write-Error "Unexpected version shape: $current"; exit 1 }
+          [int]$maj = $parts[0]; [int]$min = $parts[1]; [int]$pat = $parts[2]
+          switch ('${{ inputs.bump }}') {
+            'major' { $maj++; $min = 0; $pat = 0 }
+            'minor' { $min++; $pat = 0 }
+            'patch' { $pat++ }
+          }
+          $new = "$maj.$min.$pat"
+          Write-Host "New version: $new"
+          "current=$current" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "new=$new"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=v$new"        | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Verify tag does not already exist
+        shell: pwsh
+        run: |
+          git fetch --tags --force
+          if (git tag --list '${{ steps.ver.outputs.tag }}') {
+            Write-Error "Tag ${{ steps.ver.outputs.tag }} already exists"
+            exit 1
+          }
+
+      - name: Sync version in backend/Cargo.toml
+        shell: pwsh
+        working-directory: backend
+        run: cargo set-version ${{ steps.ver.outputs.new }}
+
+      - name: Sync version in electron/package.json
+        shell: pwsh
+        working-directory: electron
+        run: npm version ${{ steps.ver.outputs.new }} --no-git-tag-version --allow-same-version
+
+      - name: Sync version in frontend/package.json (if present)
+        shell: pwsh
+        working-directory: frontend
+        run: |
+          if (Test-Path package.json) {
+            npm version ${{ steps.ver.outputs.new }} --no-git-tag-version --allow-same-version
+          }
+
+      - name: Install electron deps
+        shell: pwsh
+        working-directory: electron
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend deps
+        shell: pwsh
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: electron
+        env:
+          # Future code-signing hooks. Empty secrets => electron-builder skips signing.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: pnpm run build:all
+
+      - name: Commit & push version bump
+        shell: pwsh
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/Cargo.toml backend/Cargo.lock electron/package.json
+          if (Test-Path frontend/package.json) { git add frontend/package.json }
+          $msg = @"
+          chore(release): v${{ steps.ver.outputs.new }} [release]
+
+          Co-Authored-By: GitHub Actions <41898282+github-actions[bot]@users.noreply.github.com>
+          "@
+          git commit -m $msg
+          git push origin HEAD:${{ github.ref_name }}
+
+      - name: Create & push annotated tag
+        shell: pwsh
+        run: |
+          git tag -a '${{ steps.ver.outputs.tag }}' -m 'StreamCheats Core ${{ steps.ver.outputs.tag }}'
+          git push origin '${{ steps.ver.outputs.tag }}'
+
+      - name: Generate release notes (since previous stable tag)
+        id: notes
+        shell: pwsh
+        run: |
+          git fetch --tags --force
+          # Previous stable tag = highest semver vX.Y.Z tag excluding the one we just pushed and excluding nightly/prerelease
+          $tags = git tag --list 'v*' | Where-Object { $_ -notmatch '-' -and $_ -ne '${{ steps.ver.outputs.tag }}' }
+          $prev = $null
+          if ($tags) {
+            $prev = $tags | Sort-Object { [version]($_.TrimStart('v')) } | Select-Object -Last 1
+          }
+          if ($prev) {
+            Write-Host "Previous stable tag: $prev"
+            $range = "$prev..${{ steps.ver.outputs.tag }}"
+          } else {
+            Write-Host "No previous stable tag found; using full history."
+            $range = '${{ steps.ver.outputs.tag }}'
+          }
+          $commits = git log --pretty=format:'%s|%h' $range
+          $feat = @(); $fix = @(); $chore = @(); $other = @()
+          foreach ($line in $commits) {
+            if (-not $line) { continue }
+            $parts = $line.Split('|', 2)
+            $subject = $parts[0]; $sha = $parts[1]
+            $entry = "- $subject ($sha)"
+            switch -Regex ($subject) {
+              '^feat(\(|:|!)'  { $feat  += $entry; break }
+              '^fix(\(|:|!)'   { $fix   += $entry; break }
+              '^chore(\(|:|!)' { $chore += $entry; break }
+              default          { $other += $entry }
+            }
+          }
+          $sb = New-Object System.Text.StringBuilder
+          [void]$sb.AppendLine("## StreamCheats Core ${{ steps.ver.outputs.tag }}")
+          [void]$sb.AppendLine("")
+          if ($prev) { [void]$sb.AppendLine("Changes since $prev:") } else { [void]$sb.AppendLine("Initial release notes:") }
+          [void]$sb.AppendLine("")
+          if ($feat)  { [void]$sb.AppendLine("### Features");      $feat  | ForEach-Object { [void]$sb.AppendLine($_) }; [void]$sb.AppendLine("") }
+          if ($fix)   { [void]$sb.AppendLine("### Fixes");         $fix   | ForEach-Object { [void]$sb.AppendLine($_) }; [void]$sb.AppendLine("") }
+          if ($chore) { [void]$sb.AppendLine("### Chores");        $chore | ForEach-Object { [void]$sb.AppendLine($_) }; [void]$sb.AppendLine("") }
+          if ($other) { [void]$sb.AppendLine("### Other changes"); $other | ForEach-Object { [void]$sb.AppendLine($_) }; [void]$sb.AppendLine("") }
+          [void]$sb.AppendLine("---")
+          [void]$sb.AppendLine("Installer: Windows NSIS (unsigned). SmartScreen may warn on first run.")
+          $notes = $sb.ToString()
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          Set-Content -Path $notesPath -Value $notes -Encoding utf8
+          "path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Locate installer artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem 'electron/dist' -Filter '*Setup*.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Error 'Installer not found in electron/dist'; exit 1 }
+          Write-Host "Artifact: $($exe.FullName)"
+          "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: StreamCheats Core ${{ steps.ver.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          prerelease: false
+          draft: false
+          files: ${{ steps.artifact.outputs.path }}

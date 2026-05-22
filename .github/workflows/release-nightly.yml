@@ -1,0 +1,212 @@
+name: Release (nightly)
+
+on:
+  workflow_dispatch:
+    inputs:
+      base_version:
+        description: Override base semver (e.g. 0.7.0). Leave empty to auto-bump patch above last stable tag.
+        required: false
+        type: string
+        default: ""
+
+concurrency:
+  group: release-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build & publish nightly prerelease
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: |
+            electron/pnpm-lock.yaml
+            frontend/pnpm-lock.yaml
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Install cargo-edit (for set-version)
+        shell: pwsh
+        run: cargo install cargo-edit --locked
+
+      - name: Compute nightly version & tag
+        id: ver
+        shell: pwsh
+        run: |
+          git fetch --tags --force
+          $override = '${{ inputs.base_version }}'.Trim()
+          if ($override) {
+            if ($override -notmatch '^\d+\.\d+\.\d+$') { Write-Error "base_version must be X.Y.Z"; exit 1 }
+            $base = $override
+          } else {
+            $stableTags = git tag --list 'v*' | Where-Object { $_ -notmatch '-' }
+            if ($stableTags) {
+              $latest = ($stableTags | Sort-Object { [version]($_.TrimStart('v')) } | Select-Object -Last 1).TrimStart('v')
+              $parts = $latest.Split('.')
+              [int]$maj = $parts[0]; [int]$min = $parts[1]; [int]$pat = $parts[2]
+              $pat++
+              $base = "$maj.$min.$pat"
+            } else {
+              # Fall back to whatever Cargo.toml currently says
+              $cargoToml = Get-Content backend/Cargo.toml -Raw
+              if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') { Write-Error "Cannot read backend/Cargo.toml version"; exit 1 }
+              $base = $Matches[1].Split('-')[0]
+            }
+          }
+          Write-Host "Base version: $base"
+          $date = (Get-Date -Format 'yyyyMMdd')
+          $prefix = "v$base-nightly.$date"
+          $existing = git tag --list "$prefix*"
+          if (-not $existing) {
+            $tag = $prefix
+            $semver = "$base-nightly.$date"
+          } else {
+            # Find next N. Existing tags look like v$base-nightly.$date or v$base-nightly.$date.N
+            $maxN = 0
+            foreach ($t in $existing) {
+              if ($t -eq $prefix) { if ($maxN -lt 1) { $maxN = 1 } }
+              elseif ($t -match "^$([Regex]::Escape($prefix))\.(\d+)$") {
+                $n = [int]$Matches[1]
+                if ($n -gt $maxN) { $maxN = $n }
+              }
+            }
+            $next = $maxN + 1
+            $tag = "$prefix.$next"
+            $semver = "$base-nightly.$date.$next"
+          }
+          Write-Host "Nightly tag:    $tag"
+          Write-Host "Nightly semver: $semver"
+          "base=$base"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "semver=$semver" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=$tag"       | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Set in-memory version (no commit)
+        shell: pwsh
+        run: |
+          Push-Location backend
+          cargo set-version '${{ steps.ver.outputs.semver }}'
+          Pop-Location
+          Push-Location electron
+          npm version '${{ steps.ver.outputs.semver }}' --no-git-tag-version --allow-same-version
+          Pop-Location
+          if (Test-Path frontend/package.json) {
+            Push-Location frontend
+            npm version '${{ steps.ver.outputs.semver }}' --no-git-tag-version --allow-same-version
+            Pop-Location
+          }
+
+      - name: Install electron deps
+        shell: pwsh
+        working-directory: electron
+        run: pnpm install --frozen-lockfile
+
+      - name: Install frontend deps
+        shell: pwsh
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installer
+        shell: pwsh
+        working-directory: electron
+        env:
+          # Future code-signing hooks. Empty secrets => electron-builder skips signing.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: pnpm run build:all
+
+      - name: Create & push nightly tag (no source commit)
+        shell: pwsh
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Tag the commit that the workflow checked out (HEAD of the dispatch branch).
+          # The in-memory version bump is NOT committed; the tag points at the unmodified source commit.
+          git tag -a '${{ steps.ver.outputs.tag }}' ${{ github.sha }} -m 'StreamCheats Core ${{ steps.ver.outputs.tag }}'
+          git push origin '${{ steps.ver.outputs.tag }}'
+
+      - name: Generate release notes (since previous tag of any kind)
+        id: notes
+        shell: pwsh
+        run: |
+          $allTags = git tag --list 'v*' | Where-Object { $_ -ne '${{ steps.ver.outputs.tag }}' }
+          $prev = $null
+          if ($allTags) {
+            # Use commit-date order of the tagged commit
+            $prev = git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags/ |
+                    Where-Object { $_ -like 'v*' -and $_ -ne '${{ steps.ver.outputs.tag }}' } |
+                    Select-Object -First 1
+          }
+          if ($prev) {
+            Write-Host "Previous tag: $prev"
+            $range = "$prev..${{ github.sha }}"
+          } else {
+            Write-Host "No previous tag; using full history."
+            $range = '${{ github.sha }}'
+          }
+          $commits = git log --pretty=format:'%s|%h' $range
+          $sb = New-Object System.Text.StringBuilder
+          [void]$sb.AppendLine("## StreamCheats Core ${{ steps.ver.outputs.tag }} (nightly prerelease)")
+          [void]$sb.AppendLine("")
+          [void]$sb.AppendLine("Built from commit ``${{ github.sha }}`` on branch ``${{ github.ref_name }}``.")
+          [void]$sb.AppendLine("")
+          if ($prev) { [void]$sb.AppendLine("### Changes since $prev") } else { [void]$sb.AppendLine("### Changes") }
+          [void]$sb.AppendLine("")
+          if (-not $commits) {
+            [void]$sb.AppendLine("- (no new commits)")
+          } else {
+            foreach ($line in $commits) {
+              if (-not $line) { continue }
+              $parts = $line.Split('|', 2)
+              [void]$sb.AppendLine("- $($parts[0]) ($($parts[1]))")
+            }
+          }
+          [void]$sb.AppendLine("")
+          [void]$sb.AppendLine("---")
+          [void]$sb.AppendLine("Nightly build. Installer is Windows NSIS (unsigned). Not intended for production use.")
+          $notes = $sb.ToString()
+          $notesPath = Join-Path $env:RUNNER_TEMP 'release-notes.md'
+          Set-Content -Path $notesPath -Value $notes -Encoding utf8
+          "path=$notesPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Locate installer artifact
+        id: artifact
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem 'electron/dist' -Filter '*Setup*.exe' | Select-Object -First 1
+          if (-not $exe) { Write-Error 'Installer not found in electron/dist'; exit 1 }
+          Write-Host "Artifact: $($exe.FullName)"
+          "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Publish GitHub Release (prerelease)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: StreamCheats Core ${{ steps.ver.outputs.tag }}
+          body_path: ${{ steps.notes.outputs.path }}
+          prerelease: true
+          draft: false
+          files: ${{ steps.artifact.outputs.path }}
