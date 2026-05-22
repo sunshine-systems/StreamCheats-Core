@@ -1,0 +1,206 @@
+/* ============================================================
+   StreamCheats Core — design tokens.
+   Industrial / hardware-diagnostic aesthetic. Dark, technical,
+   honest about its purpose: this is a daemon control surface
+   for a USB HID bridge, not a SaaS dashboard.
+   ============================================================ */
+
+:root {
+  /* --- surfaces ------------------------------------------- */
+  --kx-bg:            #0a0c10;   /* page */
+  --kx-bg-grid:       rgba(122, 240, 200, 0.045);
+  --kx-surface:       #13161c;
+  --kx-surface-2:     #1b1f27;
+  --kx-surface-3:     #232833;
+  --kx-border:        #252b36;
+  --kx-border-strong: #2f3744;
+  --kx-border-glow:   rgba(122, 240, 200, 0.28);
+
+  /* --- text ---------------------------------------------- */
+  --kx-fg:            #e6e9ef;
+  --kx-fg-2:          #aeb6c4;
+  --kx-fg-3:          #8b95a7;
+  --kx-fg-muted:      #5a6373;
+  --kx-fg-dim:        #3f4756;
+
+  /* --- accents ------------------------------------------- */
+  /* Mint/cyan is THE accent — used sparingly. Sharp, technical,
+     reads as "live data" on a black scope screen. */
+  --kx-accent:        #7af0c8;
+  --kx-accent-soft:   rgba(122, 240, 200, 0.14);
+  --kx-accent-press:  #5fd9af;
+
+  /* Warm amber for the primary CTA — contrasts the mint, keeps
+     "action" visually separate from "status". */
+  --kx-action:        #ffb86b;
+  --kx-action-press:  #f0a14d;
+  --kx-action-fg:     #1a1408;
+
+  --kx-warning:       #ffd166;
+  --kx-warning-soft:  rgba(255, 209, 102, 0.14);
+  --kx-danger:        #ff6b7a;
+  --kx-danger-soft:   rgba(255, 107, 122, 0.14);
+
+  /* --- typography ---------------------------------------- */
+  --kx-font-sans:  var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
+  --kx-font-mono:  var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --kx-fs-12: 0.75rem;
+  --kx-fs-13: 0.8125rem;
+  --kx-fs-14: 0.875rem;
+  --kx-fs-16: 1rem;
+  --kx-fs-20: 1.25rem;
+  --kx-fs-28: 1.75rem;
+  --kx-fs-40: 2.5rem;
+
+  /* --- spacing (4px base) -------------------------------- */
+  --kx-sp-1: 4px;
+  --kx-sp-2: 8px;
+  --kx-sp-3: 12px;
+  --kx-sp-4: 16px;
+  --kx-sp-5: 24px;
+  --kx-sp-6: 32px;
+  --kx-sp-7: 48px;
+  --kx-sp-8: 64px;
+
+  /* --- radii --------------------------------------------- */
+  --kx-r-sm: 3px;
+  --kx-r-md: 6px;
+  --kx-r-lg: 10px;
+  --kx-r-pill: 999px;
+
+  /* --- shadows / motion ---------------------------------- */
+  --kx-shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
+                 0 8px 24px rgba(0, 0, 0, 0.35);
+  --kx-shadow-glow: 0 0 0 1px var(--kx-border-glow),
+                    0 8px 32px rgba(122, 240, 200, 0.08);
+  --kx-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  background: var(--kx-bg);
+  color: var(--kx-fg);
+  font-family: var(--kx-font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+body {
+  min-height: 100vh;
+  background:
+    /* subtle scope-grid — 24px squares, mint at very low alpha */
+    linear-gradient(var(--kx-bg-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, var(--kx-bg-grid) 1px, transparent 1px) 0 0 / 24px 24px,
+    radial-gradient(
+      ellipse 800px 600px at 85% -10%,
+      rgba(122, 240, 200, 0.05),
+      transparent 60%
+    ),
+    radial-gradient(
+      ellipse 700px 500px at -10% 110%,
+      rgba(255, 184, 107, 0.04),
+      transparent 60%
+    ),
+    var(--kx-bg);
+}
+
+/* ============================================================
+   Utility-ish atoms used in multiple components.
+   Kept in globals so they share the token system without
+   pulling in a CSS framework.
+   ============================================================ */
+
+.kx-eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--kx-fg-3);
+  font-family: var(--kx-font-mono);
+}
+
+.kx-mono {
+  font-family: var(--kx-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.kx-card {
+  background: var(--kx-surface);
+  border: 1px solid var(--kx-border);
+  border-radius: var(--kx-r-lg);
+  padding: var(--kx-sp-5);
+}
+
+.kx-divider {
+  height: 1px;
+  background: var(--kx-border);
+  margin: var(--kx-sp-4) 0;
+}
+
+/* Diagonal accent line — used in the page header to break the
+   strict grid (per skill: "embrace asymmetry, diagonal flow,
+   grid-breaking elements"). Pure CSS, no SVG payload. */
+.kx-diag-rule {
+  position: relative;
+  height: 1px;
+  background: var(--kx-border);
+  overflow: visible;
+}
+.kx-diag-rule::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: -10px;
+  width: 80px;
+  height: 22px;
+  background: linear-gradient(
+    115deg,
+    transparent 45%,
+    var(--kx-accent) 46%,
+    var(--kx-accent) 54%,
+    transparent 55%
+  );
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+/* Reveal-on-load: staggered via animation-delay on each element. */
+@keyframes kx-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.kx-rise {
+  animation: kx-rise 480ms var(--kx-ease) both;
+}
+
+/* Slow pulse for the connected-status dot — reads as a heartbeat. */
+@keyframes kx-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--kx-accent-soft); }
+  50%      { box-shadow: 0 0 0 6px transparent; }
+}
+
+::selection {
+  background: var(--kx-accent);
+  color: var(--kx-bg);
+}
+
+/* Native scrollbar dressing (only renders if scroll is needed). */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: var(--kx-surface-3);
+  border-radius: var(--kx-r-pill);
+  border: 2px solid var(--kx-bg);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--kx-border-strong); }

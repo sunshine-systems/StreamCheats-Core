@@ -1,0 +1,43 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; width: 100%;
+    background: transparent;
+    color: #e6e9ef;
+    font-family: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+    -webkit-user-select: none;
+    overflow: hidden;
+  }
+  .wrap {
+    height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px;
+    opacity: 0;
+    animation: fadein 380ms ease-out 80ms forwards;
+  }
+  .wrap.closing { animation: fadeout 280ms ease-in forwards; }
+  .logo { width: 180px; height: 180px; filter: drop-shadow(0 4px 24px rgba(122,240,200,0.18)); }
+  .wordmark { font-size: 14px; letter-spacing: 0.06em; color: #aeb6c4; }
+  .status { font-size: 11px; color: #5a6373; min-height: 14px; }
+  @keyframes fadein  { from {opacity:0; transform: translateY(4px);} to {opacity:1; transform: none;} }
+  @keyframes fadeout { from {opacity:1;} to {opacity:0;} }
+</style></head>
+<body>
+  <div class="wrap" id="wrap">
+    <!-- LOGO_PLACEHOLDER will be replaced at runtime with the actual SVG content -->
+    <svg class="logo" id="logo" viewBox="0 0 64 64"></svg>
+    <div class="wordmark">StreamCheats Core</div>
+    <div class="status" id="status">starting&hellip;</div>
+  </div>
+  <script>
+    window.streamcheatsSplash = {
+      setStatus(text) {
+        const el = document.getElementById('status');
+        if (el) el.textContent = String(text);
+      },
+      beginClose() {
+        const el = document.getElementById('wrap');
+        if (el) el.classList.add('closing');
+      },
+    };
+  </script>
+</body></html>

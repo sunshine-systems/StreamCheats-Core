@@ -1,0 +1,64 @@
+{
+  "name": "streamcheats-core-electron",
+  "version": "0.6.2",
+  "private": true,
+  "description": "Electron shell for StreamCheats Core (wraps Rust daemon + Next.js UI)",
+  "author": "Sunshine Systems",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "pack": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "latest",
+    "electron-builder": "latest"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller"
+    ]
+  },
+  "build": {
+    "appId": "com.sunshinesystems.streamcheatscore",
+    "productName": "StreamCheats Core",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "services/**",
+      "assets/**",
+      "package.json",
+      "!node_modules/electron/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend/target/release/streamcheats_core.exe",
+        "to": "streamcheats_core.exe"
+      },
+      {
+        "from": "../backend/config.example.json",
+        "to": "config.json"
+      },
+      {
+        "from": "../frontend/out",
+        "to": "frontend"
+      }
+    ],
+    "win": {
+      "icon": "assets/streamcheats_app_icon.ico",
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "StreamCheats Core ${version}.exe"
+    }
+  }
+}

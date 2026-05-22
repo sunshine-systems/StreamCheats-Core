@@ -1,0 +1,96 @@
+[package]
+name = "streamcheats_core"
+version = "0.6.2"
+edition = "2021"
+description = "Translates KMBox Net UDP commands into Sunshine binary serial packets for the Teensy USB Host Proxy firmware."
+
+[[bin]]
+name = "streamcheats_core"
+path = "src/main.rs"
+
+# A thin lib alongside the bin so cargo examples / integration tests
+# can `use streamcheats_core::kmbox_net::encryption::*` (the
+# encryption porter test driver lives in `examples/enc_live_roundtrip.rs`).
+# `src/lib.rs` re-exports only the items those tests need; the bin
+# remains the runtime entrypoint.
+[lib]
+name = "streamcheats_core"
+path = "src/lib.rs"
+
+[dependencies]
+# serial2 (instead of serialport-rs) — properly uses overlapped IO on
+# Windows and exposes separate read/write timeouts. The old serialport
+# crate's write() called WriteFile with a NULL lpOverlapped on a handle
+# opened with FILE_FLAG_OVERLAPPED, which caused 500-630ms cold-path
+# write latencies on FTDI/CH340 hardware.
+serial2 = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+byteorder = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# tracing-appender — non-blocking writer + daily rolling file appender for
+# the optional file-logging path. Default features only (writer + rolling).
+tracing-appender = "0.2"
+# dirs — platform-aware data dir lookup. On Windows this resolves
+# `data_local_dir()` to `%LOCALAPPDATA%`; on Linux it returns
+# `$XDG_DATA_HOME` (defaulting to `~/.local/share`). Picked over
+# `directories` because it's a thinner crate with a flatter API and we
+# only need the one path.
+dirs = "5"
+ctrlc = "3"
+# sysinfo — process enumeration + signal delivery for the single-
+# instance takeover path in util::daemon. Used to (a) confirm a prior
+# pid file points at a process whose image name matches ours before
+# we'll terminate it, and (b) issue TerminateProcess via Signal::Kill
+# in a cross-platform way without pulling in `winapi`/`windows`.
+sysinfo = { version = "0.32", default-features = false, features = ["system"] }
+# tokio — minimal runtime hosting the axum HTTP server on a dedicated
+# thread. The rest of the daemon stays std::thread / mpsc based; only
+# the bug-report HTTP surface lives inside the tokio reactor. Features
+# pruned to the bare minimum axum 0.7 needs (multi-thread rt + macros
+# for the `#[tokio::main]` shim is intentionally omitted — we drive the
+# runtime via `Runtime::new()`).
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+# axum 0.7 — bug-report HTTP server. Pinned to 0.7 to stay on the
+# hyper 1 / tower-service crate set already common in the ecosystem.
+# `ws` feature pulls in axum's built-in WebSocket upgrade handler used
+# by the /logs/stream live log endpoint.
+axum = { version = "0.7", features = ["ws"] }
+# futures-util — `StreamExt`/`SinkExt` are needed to drive axum's
+# split WebSocket halves from the log-stream route. Tokio re-exports
+# don't cover the trait bounds the split halves require.
+futures-util = { version = "0.3", default-features = false, features = ["sink"] }
+# zip — in-memory zip writer for the bug-report bundle. Used with
+# Cursor<Vec<u8>> so no temp file is required.
+zip = { version = "2", default-features = false, features = ["deflate"] }
+# chrono — local-time formatting for log filename / window slicing.
+# `clock` feature pulls in the system-clock backend; `serde` keeps the
+# door open for serializing timestamps in future bundle entries.
+chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
+# hostname — used by bug-report system_info to fill `hostname=`. Tiny
+# crate, no transitive deps beyond libc on unix and winapi on windows.
+hostname = "0.4"
+# socket2 — cross-platform Socket::set_recv_buffer_size() for bumping
+# SO_RCVBUF above the OS default (~64KB on Windows) so burst UDP traffic
+# doesn't get silently dropped by the kernel before we can drain it.
+socket2 = { version = "0.5", features = ["all"] }
+# tower-http — `ServeDir` / `ServeFile` to host the bundled Next.js
+# static export from the same axum process that already serves
+# /health, /bug-report, and /logs/stream. Same-origin loading means
+# the renderer can hit /logs/stream without CORS preflight and
+# absolute /_next/... asset URLs resolve correctly across nested
+# routes. `fs` feature is the only one we need. Pinned to 0.5 to
+# match axum 0.7's tower-service / http 1.x ecosystem.
+tower-http = { version = "0.5", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+enable-ansi-support = "0.2"
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
