@@ -12,7 +12,8 @@
     "build:installer": "electron-builder",
     "pack": "electron-builder",
     "build:backend": "cargo build --release --manifest-path ../backend/Cargo.toml",
-    "build:frontend": "pnpm --filter ./../frontend build",
+    "build:frontend": "pnpm -C ../frontend build",
+    "prebuild:installer": "node -e \"const f=require('path').resolve('../frontend/out/index.html');if(!require('fs').existsSync(f)){console.error('ERROR: '+f+' missing. Run build:frontend first (or build:all).');process.exit(1)}\"",
     "build:all": "pnpm run build:backend && pnpm run build:frontend && pnpm run build:installer"
   },
   "devDependencies": {
