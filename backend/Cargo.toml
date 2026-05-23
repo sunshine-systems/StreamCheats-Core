@@ -1,6 +1,6 @@
 [package]
 name = "streamcheats_core"
-version = "0.6.2"
+version = "0.6.3"
 edition = "2021"
 description = "Translates KMBox Net UDP commands into Sunshine binary serial packets for the Teensy USB Host Proxy firmware."
 

@@ -1,6 +1,6 @@
 {
   "name": "streamcheats-core-electron",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "Electron shell for StreamCheats Core (wraps Rust daemon + Next.js UI)",
   "author": "Sunshine Systems",
@@ -59,7 +59,9 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ]
     },
