@@ -17,7 +17,7 @@ pub(crate) fn flush_line(port_name: &str, line: &[u8]) {
 }
 
 /// Render a byte slice as text, escaping non-printable bytes as `\xHH`.
-pub(crate) fn render_line(bytes: &[u8]) -> String {
+pub fn render_line(bytes: &[u8]) -> String {
     let mut out = String::with_capacity(bytes.len());
     for &b in bytes {
         if (0x20..=0x7E).contains(&b) {

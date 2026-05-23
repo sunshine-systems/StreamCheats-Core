@@ -12,7 +12,8 @@ use std::sync::Arc;
 
 use tracing::warn;
 
-use super::format::flush_line;
+use super::format::{flush_line, render_line};
+use crate::firmware::device::LastHeartbeat;
 
 /// Reader loop: collects bytes from the firmware, splits on newline, and
 /// logs every complete line as `IN (<port>): <text>`. Non-printable bytes
@@ -32,6 +33,7 @@ pub(crate) fn serial_reader_loop(
     port_name: &str,
     session_running: Arc<AtomicBool>,
     lines_received: Arc<AtomicU64>,
+    last_heartbeat: LastHeartbeat,
 ) {
     let mut buf = [0u8; 256];
     let mut line: Vec<u8> = Vec::with_capacity(256);
@@ -48,6 +50,14 @@ pub(crate) fn serial_reader_loop(
                         // a sign of life.
                         if !line.is_empty() && line.iter().any(|&b| b != 0) {
                             lines_received.fetch_add(1, Ordering::Relaxed);
+                            // Inspect the rendered line for the
+                            // `V: x.xx` heartbeat reply so the firmware
+                            // updater can surface installed version.
+                            // Render once; the format helper escapes
+                            // non-printable bytes so the parser sees
+                            // the same text the log line shows.
+                            let rendered = render_line(&line);
+                            last_heartbeat.observe_line(&rendered);
                         }
                         flush_line(port_name, &line);
                         line.clear();
@@ -60,6 +70,8 @@ pub(crate) fn serial_reader_loop(
                         if line.len() > 4096 {
                             if line.iter().any(|&b| b != 0) {
                                 lines_received.fetch_add(1, Ordering::Relaxed);
+                                let rendered = render_line(&line);
+                                last_heartbeat.observe_line(&rendered);
                             }
                             flush_line(port_name, &line);
                             line.clear();

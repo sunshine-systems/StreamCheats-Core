@@ -88,6 +88,9 @@ pub async fn set_experimental(
     Json(body): Json<ExperimentalBuildsBody>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     state.updater.set_experimental(body.enabled);
+    // Mirror to the firmware updater so the nightly channel filter
+    // stays consistent across both surfaces.
+    state.firmware.set_experimental(body.enabled);
     match set_experimental_builds(&state.cwd, body.enabled) {
         Ok(()) => {
             info!(

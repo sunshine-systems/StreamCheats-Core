@@ -11,6 +11,7 @@
 //! the WS upgrade and the asset-URL resolution quirks of `file://`.
 
 pub mod bug_report;
+pub mod firmware;
 pub mod health;
 pub mod log_stream;
 pub mod updates;
@@ -76,6 +77,14 @@ pub fn build_router(state: AppState) -> Router {
             "/api/settings/experimental_builds",
             post(updates::set_experimental),
         )
+        // Firmware updater (SC-10). `flash` / `flash_local` are stubs
+        // returning 501 until SC-13 wires up `teensy_loader_cli`.
+        .route("/api/firmware/status", get(firmware::status))
+        .route("/api/firmware/releases", get(firmware::releases))
+        .route("/api/firmware/check", post(firmware::check))
+        .route("/api/firmware/download", post(firmware::download))
+        .route("/api/firmware/flash", post(firmware::flash_stub))
+        .route("/api/firmware/flash_local", post(firmware::flash_stub))
         .with_state(state);
 
     match resolve_frontend_dir() {

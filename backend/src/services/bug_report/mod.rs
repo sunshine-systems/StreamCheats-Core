@@ -199,6 +199,12 @@ mod tests {
             started_at: Instant::now(),
             log_stream: None,
             updater: Arc::new(crate::updater::Updater::new(false)),
+            firmware: Arc::new(crate::firmware::FirmwareUpdater::new(
+                crate::firmware::DEFAULT_REPO.to_string(),
+                true,
+                false,
+                crate::firmware::device::LastHeartbeat::new(),
+            )),
             running: Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }

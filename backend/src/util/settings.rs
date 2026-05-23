@@ -54,6 +54,25 @@ struct RawSettings {
     /// setting from the UI.
     #[serde(default)]
     pub experimental_builds: Option<bool>,
+    /// Optional firmware updater settings. The whole block is optional
+    /// so existing configs without the key continue to work — defaults
+    /// land in [`Settings`] via [`validate`].
+    #[serde(default)]
+    pub firmware: Option<RawFirmwareSettings>,
+}
+
+/// Raw on-disk projection of the `firmware` settings block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RawFirmwareSettings {
+    /// GitHub `owner/repo` the firmware updater polls. Defaults to
+    /// [`crate::firmware::DEFAULT_REPO`] when absent.
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// When `false`, the daemon does not run automatic background
+    /// release checks. The manual `POST /api/firmware/check` endpoint
+    /// still works. Defaults to `true`.
+    #[serde(default)]
+    pub auto_check: Option<bool>,
 }
 
 /// Validated runtime configuration. Produced by [`load_or_create`] on a
@@ -94,10 +113,43 @@ pub struct Settings {
     /// here via [`set_experimental_builds`] when the user toggles the
     /// setting from the UI.
     pub experimental_builds: bool,
+    /// Validated firmware updater settings — repo to poll + whether
+    /// background auto-checks are on.
+    pub firmware: FirmwareSettings,
+}
+
+/// Resolved firmware updater settings.
+#[derive(Debug, Clone)]
+pub struct FirmwareSettings {
+    pub repo: String,
+    pub auto_check: bool,
+}
+
+impl Default for FirmwareSettings {
+    fn default() -> Self {
+        Self {
+            repo: crate::firmware::DEFAULT_REPO.to_string(),
+            auto_check: true,
+        }
+    }
 }
 
 fn default_json() -> &'static str {
-    "{\n  \"listen_addr\": \"127.0.0.1\",\n  \"udp_port\": 8888,\n  \"device_mac\": \"01FBC068\",\n  \"enable_timing_logs\": false,\n  \"data_dir\": \"\",\n  \"enable_file_logging\": true,\n  \"experimental_builds\": false\n}\n"
+    concat!(
+        "{\n",
+        "  \"listen_addr\": \"127.0.0.1\",\n",
+        "  \"udp_port\": 8888,\n",
+        "  \"device_mac\": \"01FBC068\",\n",
+        "  \"enable_timing_logs\": false,\n",
+        "  \"data_dir\": \"\",\n",
+        "  \"enable_file_logging\": true,\n",
+        "  \"experimental_builds\": false,\n",
+        "  \"firmware\": {\n",
+        "    \"repo\": \"sunshine-systems/Teensy-Core-1.59.0\",\n",
+        "    \"auto_check\": true\n",
+        "  }\n",
+        "}\n"
+    )
 }
 
 /// Resolve the effective data directory. An explicit non-empty
@@ -167,6 +219,27 @@ fn validate(raw: RawSettings) -> Result<Settings> {
         // config.json if they want zero on-disk files.
         enable_file_logging: raw.enable_file_logging.unwrap_or(true),
         experimental_builds: raw.experimental_builds.unwrap_or(false),
+        firmware: resolve_firmware(raw.firmware)?,
+    })
+}
+
+/// Apply firmware-block defaults. Validates `repo` is in `owner/repo`
+/// shape so a typo'd config doesn't silently hit a malformed URL on
+/// every poll.
+fn resolve_firmware(raw: Option<RawFirmwareSettings>) -> Result<FirmwareSettings> {
+    let raw = raw.unwrap_or_default();
+    let repo = match raw.repo.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => {
+            if !s.contains('/') || s.starts_with('/') || s.ends_with('/') {
+                bail!("firmware.repo {:?} must be in `owner/repo` form", s);
+            }
+            s.to_string()
+        }
+        _ => crate::firmware::DEFAULT_REPO.to_string(),
+    };
+    Ok(FirmwareSettings {
+        repo,
+        auto_check: raw.auto_check.unwrap_or(true),
     })
 }
 
@@ -248,9 +321,8 @@ pub fn load_or_create(dir: &Path) -> Result<LoadOutcome> {
         Ok(s) => s,
         Err(e) => {
             let _ = fs::remove_file(&path);
-            fs::write(&path, default_json()).with_context(|| {
-                format!("rewriting default config to {}", path.display())
-            })?;
+            fs::write(&path, default_json())
+                .with_context(|| format!("rewriting default config to {}", path.display()))?;
             return Ok(LoadOutcome::WroteDefault {
                 path,
                 reason: Some(format!("could not read file: {}", e)),
@@ -262,9 +334,8 @@ pub fn load_or_create(dir: &Path) -> Result<LoadOutcome> {
         Ok(r) => r,
         Err(e) => {
             let _ = fs::remove_file(&path);
-            fs::write(&path, default_json()).with_context(|| {
-                format!("rewriting default config to {}", path.display())
-            })?;
+            fs::write(&path, default_json())
+                .with_context(|| format!("rewriting default config to {}", path.display()))?;
             return Ok(LoadOutcome::WroteDefault {
                 path,
                 reason: Some(format!("JSON parse error: {}", e)),
@@ -312,6 +383,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: None,
             experimental_builds: None,
+            firmware: None,
         };
         assert!(validate(raw).is_err());
     }
@@ -326,6 +398,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: None,
             experimental_builds: None,
+            firmware: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.udp_port, DEFAULT_UDP_PORT);
@@ -345,6 +418,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: None,
             experimental_builds: None,
+            firmware: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_timing_logs);
@@ -364,6 +438,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: None,
             experimental_builds: None,
+            firmware: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_file_logging);
@@ -382,6 +457,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: Some(false),
             experimental_builds: None,
+            firmware: None,
         };
         let s = validate(raw).unwrap();
         assert!(!s.enable_file_logging);
@@ -397,6 +473,7 @@ mod tests {
             data_dir: Some("C:/tmp/streamcheats-test".into()),
             enable_file_logging: Some(true),
             experimental_builds: None,
+            firmware: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.data_dir, PathBuf::from("C:/tmp/streamcheats-test"));
@@ -413,6 +490,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: None,
             experimental_builds: None,
+            firmware: None,
         };
         assert!(!validate(raw).unwrap().experimental_builds);
 
@@ -424,6 +502,7 @@ mod tests {
             data_dir: None,
             enable_file_logging: None,
             experimental_builds: Some(true),
+            firmware: None,
         };
         assert!(validate(raw_on).unwrap().experimental_builds);
     }
@@ -432,10 +511,8 @@ mod tests {
     fn set_experimental_builds_round_trips() {
         // Round-trip the toggle through disk, verify the value persists
         // AND that other fields aren't dropped by the rewrite.
-        let dir = std::env::temp_dir().join(format!(
-            "streamcheats-settings-test-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("streamcheats-settings-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join(CONFIG_FILENAME);
@@ -458,14 +535,20 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
         assert_eq!(parsed["experimental_builds"], serde_json::Value::Bool(true));
         // Other fields preserved.
-        assert_eq!(parsed["device_mac"], serde_json::Value::String("01FBC068".into()));
+        assert_eq!(
+            parsed["device_mac"],
+            serde_json::Value::String("01FBC068".into())
+        );
         assert_eq!(parsed["udp_port"], serde_json::Value::Number(8888.into()));
 
         // And we can flip it back.
         set_experimental_builds(&dir, false).unwrap();
         let after = fs::read_to_string(&path).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&after).unwrap();
-        assert_eq!(parsed["experimental_builds"], serde_json::Value::Bool(false));
+        assert_eq!(
+            parsed["experimental_builds"],
+            serde_json::Value::Bool(false)
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }

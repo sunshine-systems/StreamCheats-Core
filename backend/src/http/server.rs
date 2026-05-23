@@ -19,6 +19,7 @@ use std::time::Duration;
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 
+use crate::firmware;
 use crate::http::routes::build_router;
 use crate::http::state::AppState;
 use crate::updater;
@@ -88,6 +89,14 @@ pub fn spawn_http_server(
     let updater_handle = state_template.updater.clone();
     runtime.spawn(async move {
         updater::spawn_poller(updater_handle);
+    });
+
+    // Firmware updater poller — same pattern as the software updater.
+    // Spawned inside the HTTP runtime so it shares the reactor with the
+    // route handlers that read its state.
+    let firmware_handle = state_template.firmware.clone();
+    runtime.spawn(async move {
+        firmware::spawn_poller(firmware_handle);
     });
 
     let router = build_router(state_template);
