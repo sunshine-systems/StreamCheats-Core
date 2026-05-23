@@ -58,11 +58,12 @@ export function useFirmwareStatus(): FirmwareStatusSnapshot {
     };
   }, [refresh]);
 
-  // Tighter polling while a download is in flight so the percent UI
-  // doesn't feel frozen between 30s ticks.
+  // Tighter polling while a download OR flash is in flight so the
+  // progress / elapsed-time UI doesn't feel frozen between 30s ticks.
+  // Same 1s cadence as the software updater's downloading window.
   const kind: FirmwareState["kind"] | undefined = status?.state.kind;
   useEffect(() => {
-    if (kind !== "downloading") return;
+    if (kind !== "downloading" && kind !== "flashing") return;
     const id = setInterval(refresh, ACTIVE_POLL_INTERVAL_MS);
     return () => clearInterval(id);
   }, [kind, refresh]);

@@ -1,13 +1,19 @@
-//! `/api/firmware/*` routes — see SC-10.
+//! `/api/firmware/*` routes — see SC-10 + SC-13.
 //!
 //! Read-side endpoints (`status`, `releases`) snapshot the firmware
-//! updater's shared state. Write-side endpoints (`check`, `download`)
-//! kick off background work and return 202 on dispatch.
+//! updater's shared state. Write-side endpoints (`check`, `download`,
+//! `flash`, `flash_local`) kick off background work and return 202 on
+//! dispatch.
 //!
-//! `flash` / `flash_local` are intentionally NOT implemented here —
-//! they land in SC-13. They return HTTP 501 with `not_implemented` so
-//! the UI can probe and render a "pending" affordance until the flash
-//! integration ships.
+//! Flash dispatch (SC-13): both `/flash` and `/flash_local` first
+//! validate single-flight + path/version preconditions and return
+//! 409 with a stable error code on rejection; otherwise they spawn
+//! the background `teensy_loader_cli` task and return 202. If the
+//! daemon can't find the `teensy_loader_cli.exe` binary at all (not
+//! bundled in this build), the failure is reported via the state
+//! machine's `Failed` transition with `binary_not_bundled`-shaped
+//! text — the synchronous response is still 202 because resolving
+//! the binary is a runtime concern inside the spawn.
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -92,14 +98,61 @@ pub async fn download(
     }
 }
 
-/// `POST /api/firmware/flash` — placeholder until SC-13.
-pub async fn flash_stub() -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "ok": false,
-            "error": "not_implemented",
-            "follow_up": "SC-13",
-        })),
-    )
+#[derive(Deserialize)]
+pub struct FlashBody {
+    pub version: String,
+}
+
+/// `POST /api/firmware/flash` — flash a specific previously-downloaded
+/// release. Body: `{ "version": "rel-5.17" }`. The release must be in
+/// `Ready` state for that exact version (i.e. user already hit
+/// Download). Returns 202 on dispatch; 409 with `{ error: "..." }` on
+/// rejection. Error codes mirror [`crate::firmware::FirmwareUpdater::start_flash`].
+pub async fn flash(
+    State(state): State<AppState>,
+    Json(body): Json<FlashBody>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    match state.firmware.start_flash(&body.version).await {
+        Ok(()) => {
+            info!("firmware: flash dispatched for {}", body.version);
+            (StatusCode::ACCEPTED, Json(json!({ "ok": true })))
+        }
+        Err(e) => {
+            warn!("firmware: flash rejected: {}", e);
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+pub struct FlashLocalBody {
+    pub hex_path: String,
+}
+
+/// `POST /api/firmware/flash_local` — flash an arbitrary local `.hex`
+/// file. Body: `{ "hex_path": "C:\\absolute\\path\\to\\firmware.hex" }`.
+/// Useful for downgrading to an older firmware not in the release
+/// feed. Validation: file exists, `.hex` extension, non-empty. Same
+/// single-flight semantics as `/flash`.
+pub async fn flash_local(
+    State(state): State<AppState>,
+    Json(body): Json<FlashLocalBody>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    let path = std::path::PathBuf::from(&body.hex_path);
+    match state.firmware.start_flash_local(path).await {
+        Ok(()) => {
+            info!("firmware: flash_local dispatched for {}", body.hex_path);
+            (StatusCode::ACCEPTED, Json(json!({ "ok": true })))
+        }
+        Err(e) => {
+            warn!("firmware: flash_local rejected: {}", e);
+            (
+                StatusCode::CONFLICT,
+                Json(json!({ "ok": false, "error": e })),
+            )
+        }
+    }
 }

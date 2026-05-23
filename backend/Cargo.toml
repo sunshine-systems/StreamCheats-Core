@@ -52,7 +52,7 @@ sysinfo = { version = "0.32", default-features = false, features = ["system"] }
 # pruned to the bare minimum axum 0.7 needs (multi-thread rt + macros
 # for the `#[tokio::main]` shim is intentionally omitted — we drive the
 # runtime via `Runtime::new()`).
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "signal", "time", "process", "io-util"] }
 # axum 0.7 — bug-report HTTP server. Pinned to 0.7 to stay on the
 # hyper 1 / tower-service crate set already common in the ecosystem.
 # `ws` feature pulls in axum's built-in WebSocket upgrade handler used
@@ -97,6 +97,10 @@ semver = "1"
 # future signed-release work. We compute it during the stream-to-disk
 # pass so there's no second read.
 sha2 = "0.10"
+# thiserror — derive Error on the firmware::flash error enum (SC-13) so
+# the route layer can pattern-match on causes cleanly without re-rolling
+# the boilerplate every time.
+thiserror = "1"
 
 [target.'cfg(windows)'.dependencies]
 # winreg — reads the installed-version DisplayVersion off the NSIS

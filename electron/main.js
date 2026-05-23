@@ -4,7 +4,7 @@
 // the AGENTS notes on distributed file architecture (one responsibility
 // per file). This file only wires the services together.
 
-const { app, Menu, ipcMain } = require('electron');
+const { app, Menu, ipcMain, dialog, BrowserWindow } = require('electron');
 const fs = require('fs');
 const path = require('path');
 
@@ -99,6 +99,39 @@ ipcMain.handle('backend-url:get', async () => {
   return backendUrl.getBackendUrl();
 });
 
+// SC-13: native .hex file picker for the manual-flash card on the
+// Updates page. We anchor the dialog to the renderer that asked for
+// it (via webContents → BrowserWindow lookup) so it modally blocks
+// the right window. Falls back to a window-less dialog if we can't
+// resolve the parent — better that than crashing.
+ipcMain.handle('pick-hex-file:run', async (event) => {
+  try {
+    const parent =
+      BrowserWindow.fromWebContents(event.sender) ||
+      mainWindow ||
+      BrowserWindow.getFocusedWindow();
+    const opts = {
+      title: 'Select firmware .hex file',
+      buttonLabel: 'Flash',
+      properties: ['openFile'],
+      filters: [
+        { name: 'Teensy firmware', extensions: ['hex'] },
+        { name: 'All files', extensions: ['*'] },
+      ],
+    };
+    const result = parent
+      ? await dialog.showOpenDialog(parent, opts)
+      : await dialog.showOpenDialog(opts);
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, reason: 'cancelled' };
+    }
+    return { ok: true, path: result.filePaths[0] };
+  } catch (err) {
+    logger.warn(`[pickHexFile] dialog failed: ${err.message}`);
+    return { ok: false, reason: 'unavailable' };
+  }
+});
+
 // ---------------------------------------------------------------------------
 // App lifecycle
 // ---------------------------------------------------------------------------
@@ -153,13 +186,36 @@ app.whenReady().then(async () => {
     ? FRONTEND_DIR_DEV
     : null;
 
+  // SC-13: locate the bundled `teensy_loader_cli.exe` (if any) and
+  // surface its absolute path to the daemon via env. Packaged: lives
+  // under `resources/vendor/teensy_loader_cli.exe` (electron-builder
+  // extraResources rule); dev: lives under `backend/vendor/`. When
+  // absent we don't set the env var at all — the daemon's resolver
+  // falls through to its own dev-path checks, and the flash routes
+  // surface a clear error if the binary really isn't anywhere.
+  const teensyLoaderCandidates = IS_PACKAGED
+    ? [path.join(process.resourcesPath, 'vendor', 'teensy_loader_cli.exe')]
+    : [path.join(PROJECT_ROOT, 'backend', 'vendor', 'teensy_loader_cli.exe')];
+  const teensyLoaderPath = teensyLoaderCandidates.find((p) => fs.existsSync(p)) || null;
+  if (teensyLoaderPath) {
+    logger.info(`[main] teensy_loader_cli: ${teensyLoaderPath}`);
+  } else {
+    logger.warn(
+      `[main] teensy_loader_cli not bundled — firmware flash will return "binary_not_bundled" until the binary is dropped in (see SC-13 PR body).`
+    );
+  }
+
+  const daemonEnv = {};
+  if (frontendDir) daemonEnv.STREAMCHEATS_FRONTEND_DIR = frontendDir;
+  if (teensyLoaderPath) daemonEnv.STREAMCHEATS_TEENSY_LOADER_PATH = teensyLoaderPath;
+
   splash.setStatus('starting daemon…');
   backend.spawnIfNeeded({
     packagedPath: BACKEND_BIN_PACKAGED,
     releasePath: BACKEND_BIN_RELEASE,
     debugPath: BACKEND_BIN_DEBUG,
     cwd: backendCwd,
-    env: frontendDir ? { STREAMCHEATS_FRONTEND_DIR: frontendDir } : undefined,
+    env: Object.keys(daemonEnv).length > 0 ? daemonEnv : undefined,
   });
 
   trayHandle = trayService.create({

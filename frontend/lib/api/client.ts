@@ -14,7 +14,18 @@ export interface StreamCheatsBridge {
   healthCheck: () => Promise<BridgeHealthCheckResult>;
   healthDetail?: () => Promise<BridgeHealthDetailResult>;
   getBackendUrl?: () => Promise<BridgeBackendUrlResult>;
+  /**
+   * SC-13: native .hex file picker for the manual-flash card. Only
+   * present when the renderer is loaded inside the Electron shell —
+   * web-only dev runs see `undefined` here.
+   */
+  pickHexFile?: () => Promise<BridgePickHexFileResult>;
 }
+
+/** Shape returned by `window.streamcheats.pickHexFile()`. Never throws. */
+export type BridgePickHexFileResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: "cancelled" | "unavailable" };
 
 /** Shape returned by `window.streamcheats.getBackendUrl()`. Never throws. */
 export type BridgeBackendUrlResult =

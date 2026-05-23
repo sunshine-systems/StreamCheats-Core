@@ -17,9 +17,11 @@
 pub mod device;
 pub mod download;
 pub mod filename;
+pub mod flash;
 pub mod github;
 
-use std::sync::atomic::AtomicBool;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -80,7 +82,22 @@ pub enum State {
         size: u64,
         sha256: String,
     },
-    /// Last check or download failed.
+    /// Flash in flight. `teensy_loader_cli` doesn't expose a structured
+    /// progress signal, so we surface elapsed time + the asset version
+    /// rather than a percent. The UI shows an indeterminate spinner.
+    Flashing {
+        /// Display version we asked the loader to write (e.g.
+        /// `"rel-5.17"` or `"manual"` for `/flash_local`).
+        version: String,
+        /// Absolute path of the hex file being flashed. Useful for the
+        /// UI to confirm-display "flashing C:\…\file.hex" on the
+        /// manual-flash path.
+        hex_path: String,
+        /// RFC3339 timestamp the flash started, so the UI can render
+        /// `Math.floor((now - started_at) / 1000)` for elapsed time.
+        started_at: String,
+    },
+    /// Last check, download, or flash failed.
     Failed { error: String, when: String },
 }
 
@@ -121,6 +138,15 @@ pub struct FirmwareUpdater {
     pub repo: Arc<Mutex<String>>,
     pub client: reqwest::Client,
     pub api_base: String,
+    /// Single-flight guard for `start_flash` / `start_flash_local`,
+    /// shared with [`device::LastHeartbeat::flash_suspended`] so the
+    /// heartbeat timeout in [`device::LastHeartbeat::snapshot_at`] is
+    /// suspended for exactly the same window the flash holds the
+    /// guard. A second concurrent flash attempt returns
+    /// `Err("flash_in_progress")` instead of queuing — the bootloader
+    /// can only host one write at a time and queueing makes the
+    /// failure modes harder to reason about.
+    pub flash_in_progress: Arc<AtomicBool>,
 }
 
 impl FirmwareUpdater {
@@ -146,12 +172,13 @@ impl FirmwareUpdater {
         Self {
             state: Arc::new(Mutex::new(State::Idle)),
             releases: Arc::new(Mutex::new(Vec::new())),
-            installed,
+            installed: installed.clone(),
             experimental: Arc::new(AtomicBool::new(experimental_initial)),
             auto_check: Arc::new(AtomicBool::new(auto_check_initial)),
             repo: Arc::new(Mutex::new(repo)),
             client,
             api_base: github::DEFAULT_API_BASE.to_string(),
+            flash_in_progress: installed.flash_suspended(),
         }
     }
 
@@ -364,6 +391,131 @@ impl FirmwareUpdater {
                 }
             }
         });
+        Ok(())
+    }
+
+    /// Start flashing a previously-downloaded release. The version
+    /// must match a cached [`ReleaseEntry`] AND the daemon must be in
+    /// the [`State::Ready`] state for that version (i.e. the user has
+    /// already hit Download). Returns immediately on dispatch; the
+    /// actual flash runs on a background task. The state machine
+    /// drives the rest of the UI: `Ready` → `Flashing` → `UpToDate` /
+    /// `Failed`.
+    ///
+    /// Error strings are stable wire-form codes the route layer
+    /// surfaces as `{ "error": "..." }`:
+    ///
+    ///   `flash_in_progress`  another flash is already running
+    ///   `hex_not_downloaded` no `Ready` state matching `version`
+    ///   `unknown_version`    version isn't in the releases cache
+    ///   `unsupported_board`  no MCU lookup for the release's board
+    pub async fn start_flash(self: &Arc<Self>, version: &str) -> Result<(), String> {
+        let entry = {
+            let g = self.releases.lock().await;
+            g.iter().find(|e| e.version == version).cloned()
+        };
+        let entry = entry.ok_or_else(|| "unknown_version".to_string())?;
+        let mcu = flash::mcu_for(&entry.board).ok_or_else(|| "unsupported_board".to_string())?;
+
+        // The state must currently be Ready for the requested version
+        // (or, generously, any Ready state — the user might have
+        // downloaded then re-checked which can transition Ready →
+        // Available). We refuse if no Ready hex exists.
+        let hex_path = {
+            let s = self.state.lock().await;
+            match &*s {
+                State::Ready {
+                    latest, hex_path, ..
+                } if latest == &entry.version => PathBuf::from(hex_path),
+                _ => return Err("hex_not_downloaded".to_string()),
+            }
+        };
+
+        self.spawn_flash(entry.version.clone(), hex_path, mcu).await
+    }
+
+    /// Start flashing an arbitrary local `.hex` file. Used by the
+    /// manual-flash file picker in the Updates UI for downgrades or
+    /// out-of-band firmware. Board is assumed to be `teensy-4.1` for
+    /// v1 — future boards land alongside [`flash::mcu_for`].
+    pub async fn start_flash_local(self: &Arc<Self>, hex_path: PathBuf) -> Result<(), String> {
+        let mcu = flash::mcu_for("teensy-4.1").ok_or_else(|| "unsupported_board".to_string())?;
+        if let Err(e) = flash::validate_hex_path(&hex_path) {
+            return Err(format!("invalid_hex: {}", e));
+        }
+        self.spawn_flash("manual".to_string(), hex_path, mcu).await
+    }
+
+    /// Shared by both flash entry points: trip the single-flight flag,
+    /// transition to `Flashing`, kick off the subprocess on a tokio
+    /// task, and on completion transition to `UpToDate` (on success)
+    /// or `Failed` (on subprocess non-zero / spawn error).
+    async fn spawn_flash(
+        self: &Arc<Self>,
+        version: String,
+        hex_path: PathBuf,
+        mcu: &'static str,
+    ) -> Result<(), String> {
+        // Single-flight: trip the flag with a CAS so two simultaneous
+        // requests can't both win. The loser sees the existing `true`
+        // and gets the stable `flash_in_progress` error code.
+        if self
+            .flash_in_progress
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return Err("flash_in_progress".to_string());
+        }
+
+        let started_at = now_string();
+        self.set_state(State::Flashing {
+            version: version.clone(),
+            hex_path: hex_path.to_string_lossy().to_string(),
+            started_at,
+        })
+        .await;
+
+        let me = self.clone();
+        let version_for_task = version.clone();
+        let hex_for_task = hex_path.clone();
+        tokio::spawn(async move {
+            let outcome = flash::run_flash(mcu, &hex_for_task).await;
+            // Clear the single-flight + heartbeat-suspension flag
+            // BEFORE the state transition so anything reading
+            // `installed_version` immediately afterwards sees the
+            // resumed heartbeat timing — not a frozen `age_ms = 0`.
+            me.flash_in_progress.store(false, Ordering::SeqCst);
+            match outcome {
+                Ok(()) => {
+                    info!(
+                        "firmware: flash succeeded version={} hex={}",
+                        version_for_task,
+                        hex_for_task.display()
+                    );
+                    // We don't know whether the device has actually
+                    // rebooted into the new firmware yet — the next
+                    // heartbeat will refresh `installed`. Transition
+                    // to `UpToDate` with the version we just wrote so
+                    // the UI immediately reflects success; the
+                    // background poller will reconcile on its next
+                    // check if reality disagrees.
+                    me.set_state(State::UpToDate {
+                        installed: version_for_task,
+                        checked_at: now_string(),
+                    })
+                    .await;
+                }
+                Err(e) => {
+                    warn!("firmware: flash failed: {}", e);
+                    me.set_state(State::Failed {
+                        error: format!("flash failed: {}", e),
+                        when: now_string(),
+                    })
+                    .await;
+                }
+            }
+        });
+
         Ok(())
     }
 

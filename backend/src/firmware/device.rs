@@ -10,6 +10,7 @@
 //! (e.g. SC-7's `/api/device/status`) both read installed firmware
 //! state from this struct rather than re-implementing the parser.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -23,9 +24,17 @@ pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Shared "last firmware version we saw" state. Cheap to clone — the
 /// inner mutex is poisoned-safe (locks recovered via `.into_inner()`).
+///
+/// SC-13: also carries a `flash_suspended` flag. While a firmware flash
+/// is in flight the Teensy disappears from USB for 10-30 s as it
+/// reboots into the bootloader. Callers reading [`Self::snapshot`]
+/// during that window get the *last-known* version with `age_ms`
+/// frozen at the moment the flag flipped, so the UI doesn't surface
+/// a transient "Unknown" / "disconnected" state for the flash duration.
 #[derive(Clone, Default)]
 pub struct LastHeartbeat {
     inner: Arc<Mutex<Inner>>,
+    flash_suspended: Arc<AtomicBool>,
 }
 
 #[derive(Default)]
@@ -81,11 +90,26 @@ impl LastHeartbeat {
 
     /// Snapshot the current installed-firmware state. Uses `now` so
     /// tests can pin the timeout boundary deterministically.
+    ///
+    /// While [`Self::flash_suspended`] is set the timeout window is
+    /// effectively infinite — we return `Known` with `age_ms == 0` as
+    /// long as we've ever seen a version, so the UI doesn't flicker
+    /// to "disconnected" mid-flash. The flag is cleared by
+    /// [`super::FirmwareUpdater`] once the loader process exits, at
+    /// which point normal timeout behaviour resumes (with the next
+    /// real heartbeat reply bumping `age_ms` back to live).
     pub fn snapshot_at(&self, now: Instant) -> InstalledFirmware {
+        let suspended = self.flash_suspended.load(Ordering::SeqCst);
         let g = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         match (g.version, g.at) {
             (Some(v), Some(at)) => {
                 let age = now.saturating_duration_since(at);
+                if suspended {
+                    return InstalledFirmware::Known {
+                        version: v,
+                        age_ms: 0,
+                    };
+                }
                 if age <= HEARTBEAT_TIMEOUT {
                     InstalledFirmware::Known {
                         version: v,
@@ -97,6 +121,15 @@ impl LastHeartbeat {
             }
             _ => InstalledFirmware::Unknown,
         }
+    }
+
+    /// Hand back a cloneable handle to the flash-suspension flag.
+    /// [`super::FirmwareUpdater`] holds the only writer; everyone else
+    /// just reads it via [`Self::snapshot_at`]. Flipping it during a
+    /// flash freezes `age_ms` at 0 and stops the device.rs timeout
+    /// from declaring the Teensy "Unknown" while it's rebooting.
+    pub fn flash_suspended(&self) -> Arc<AtomicBool> {
+        self.flash_suspended.clone()
     }
 
     /// Convenience: snapshot using wall-clock `Instant::now()`.

@@ -18,6 +18,7 @@ export type FirmwareStateKind =
   | "available"
   | "downloading"
   | "ready"
+  | "flashing"
   | "failed";
 
 export interface FirmwareState {
@@ -36,6 +37,9 @@ export interface FirmwareState {
   hex_path?: string;
   size?: number;
   sha256?: string;
+  // Present only when kind === "flashing".
+  version?: string;
+  started_at?: string;
   error?: string;
   when?: string;
 }
@@ -67,19 +71,25 @@ export interface FirmwareReleasesResponse {
 }
 
 /**
- * Result of probing a flash endpoint. Until SC-13 lands the daemon
- * returns 501; the caller renders a "Coming in SC-13" affordance.
+ * Result of dispatching a flash. 202 on accepted, 409 with a stable
+ * error code on rejection (see backend/src/firmware/mod.rs:
+ * `start_flash` / `start_flash_local`). The UI polls
+ * `/api/firmware/status` for progress once dispatch succeeds.
  */
 export type FlashResult =
   | { ok: true }
   | {
       ok: false;
       reason:
-        | "not_implemented"
-        | "network"
-        | "device_not_connected"
+        | "flash_in_progress"
         | "hex_not_downloaded"
-        | "already_flashing"
+        | "unknown_version"
+        | "unsupported_board"
+        | "invalid_hex"
+        | "network"
+        // Kept for legacy paths (e.g. an older daemon still returning
+        // 501); current daemon never produces this.
+        | "not_implemented"
         | "unknown";
       detail?: string;
     };
@@ -191,18 +201,46 @@ async function interpretFlashResponse(resp: Response): Promise<FlashResult> {
   if (resp.status === 409) {
     try {
       const body = (await resp.json()) as { error?: string };
-      const error = body.error;
-      if (
-        error === "device_not_connected" ||
-        error === "hex_not_downloaded" ||
-        error === "already_flashing"
-      ) {
-        return { ok: false, reason: error };
+      const raw = body.error ?? "";
+      // The daemon returns a stable code; for "invalid_hex" it prefixes
+      // a human-readable cause (e.g. "invalid_hex: ... is empty").
+      if (raw.startsWith("invalid_hex")) {
+        return {
+          ok: false,
+          reason: "invalid_hex",
+          detail: raw.replace(/^invalid_hex:\s*/, ""),
+        };
       }
-      return { ok: false, reason: "unknown", detail: error };
+      if (
+        raw === "flash_in_progress" ||
+        raw === "hex_not_downloaded" ||
+        raw === "unknown_version" ||
+        raw === "unsupported_board"
+      ) {
+        return { ok: false, reason: raw };
+      }
+      return { ok: false, reason: "unknown", detail: raw };
     } catch {
       return { ok: false, reason: "unknown" };
     }
   }
   return { ok: false, reason: "unknown", detail: `HTTP ${resp.status}` };
+}
+
+/** Resolved shape returned by `window.streamcheats.pickHexFile`. */
+export type PickHexFileResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: "cancelled" | "unavailable" };
+
+/**
+ * Open the OS-native file picker (constrained to `.hex`) via the
+ * Electron preload bridge. Returns the absolute path the user chose,
+ * or null on cancel / no-bridge.
+ */
+export async function pickHexFile(): Promise<string | null> {
+  const bridge = getBridge();
+  if (!bridge || typeof bridge.pickHexFile !== "function") return null;
+  const r = await bridge.pickHexFile();
+  if (r.ok) return r.path;
+  return null;
 }
