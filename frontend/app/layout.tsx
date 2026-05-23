@@ -1,17 +1,20 @@
 import type { Metadata } from "next";
-import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import { Fraunces, Inter_Tight, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
+import AppShell from "../components/AppShell";
 import { ToastProvider } from "../lib/toast/toast";
 
-// Distinctive, characterful fonts — avoiding the generic Inter/Geist
-// default the skill calls out. Space Grotesk has more personality in
-// its curves (the "a", the "g"), JetBrains Mono brings true mono
-// numerics for the PID/port/uptime readouts.
-const spaceGrotesk = Space_Grotesk({
-  variable: "--font-space-grotesk",
+// Type stack ported from the marketing site (streamcheats-marketing/
+// app-v2): Fraunces for display + occasional eyebrows, JetBrains Mono
+// for all chrome (labels, code, version strings, sidebar tooltips),
+// Inter Tight for dense panels and the body fallback. See the
+// marketing repo's DESIGN.md for the full rationale.
+const fraunces = Fraunces({
+  variable: "--font-fraunces",
   subsets: ["latin"],
   display: "swap",
+  axes: ["SOFT", "opsz"],
 });
 
 const jetBrainsMono = JetBrains_Mono({
@@ -20,9 +23,15 @@ const jetBrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+const interTight = Inter_Tight({
+  variable: "--font-inter-tight",
+  subsets: ["latin"],
+  display: "swap",
+});
+
 export const metadata: Metadata = {
   title: "StreamCheats Core",
-  description: "StreamCheats Core — KMBox Net protocol bridge",
+  description: "StreamCheats Core — HID bridge daemon control surface",
 };
 
 export default function RootLayout({
@@ -33,10 +42,12 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${spaceGrotesk.variable} ${jetBrainsMono.variable}`}
+      className={`${fraunces.variable} ${jetBrainsMono.variable} ${interTight.variable}`}
     >
       <body>
-        <ToastProvider>{children}</ToastProvider>
+        <ToastProvider>
+          <AppShell>{children}</AppShell>
+        </ToastProvider>
       </body>
     </html>
   );

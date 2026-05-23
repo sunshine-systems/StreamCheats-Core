@@ -61,7 +61,11 @@ export function useConnectionStatus(): ConnectionState {
     if (!bridge) {
       // Browser fallback (next dev without Electron) — we can't reach
       // the daemon via IPC. Render as disconnected; the dev can still
-      // exercise the rest of the UI.
+      // exercise the rest of the UI. The setState-in-effect lint
+      // rule is benign here: this branch only fires when the IPC
+      // bridge is missing (dev mode) and transitions to a terminal
+      // state once per mount, not a cascading render loop.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setState({ status: "disconnected", reason: "no_bridge" });
       return () => {
         cancelledRef.current = true;

@@ -1,36 +1,18 @@
-"use client";
+// Logs page — stub at SC-6. SC-11 ports the existing terminal-style
+// log viewport (LogViewport / useLogStream) into the new shell, so
+// the old `frontend/app/logs/page.tsx` content has been replaced
+// with a placeholder. The underlying components and the
+// `/logs/stream` WebSocket plumbing remain untouched.
 
-// Full-bleed terminal-style log viewer fed by the /logs/stream WS.
-// Lives under /logs so the AppHeader tab strip can navigate to it.
-
-import AppFooter from "../../components/AppFooter";
-import AppHeader from "../../components/AppHeader";
-import LogViewport from "../../components/LogViewport";
-import { useHealthDetail } from "../../lib/hooks/useHealthDetail";
+import PendingStub from "../../components/ui/PendingStub";
 
 export default function LogsPage() {
-  const detail = useHealthDetail();
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        display: "grid",
-        gridTemplateRows: "auto 1fr auto",
-      }}
-    >
-      <AppHeader version={detail?.version ?? null} />
-      <div className="kx-diag-rule" aria-hidden="true" />
-
-      <main
-        style={{
-          padding: "var(--kx-sp-5) var(--kx-sp-7)",
-          minWidth: 0,
-        }}
-      >
-        <LogViewport />
-      </main>
-
-      <AppFooter />
-    </div>
+    <PendingStub
+      eyebrow="logs · live stream"
+      title="Logs"
+      ticket="SC-11"
+      blurb="Live tail of the daemon's structured logs with filter chips and a copy-line affordance."
+    />
   );
 }
