@@ -7,6 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::experimental::Manager as ExperimentalManager;
 use crate::firmware::FirmwareUpdater;
 use crate::kmbox_net::monitor::PeerRegistry;
 use crate::services::log_stream::LogStreamHandles;
@@ -95,6 +96,11 @@ pub struct AppState {
     /// installed version). Polled by its own background task spawned in
     /// `server.rs`; exposed via `/api/firmware/*`. See SC-10.
     pub firmware: Arc<FirmwareUpdater>,
+    /// Experimental input-API control plane (SC-8). Owns the lifecycle
+    /// of the kmbox-net (and future serial-bridge / tcp-bridge)
+    /// listeners. Routes under `/api/experimental/*` read and mutate
+    /// this manager; the manager persists changes to `config.json`.
+    pub experimental: ExperimentalManager,
     /// Flag the daemon's main loop polls. When the updater handler for
     /// `/api/updates/install` flips it, the daemon exits cleanly so the
     /// installer can replace files on disk. Same shape as the global

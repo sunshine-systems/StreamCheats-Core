@@ -27,6 +27,7 @@ import {
 import type { ReactNode } from "react";
 
 import { useAnyUpdatePending } from "../lib/hooks/useAnyUpdatePending";
+import { useExperimentalActive } from "../lib/hooks/useExperimentalStatus";
 import { type AppRoute, normalizeRoute, relativeHref } from "../lib/route/href";
 
 interface NavItem {
@@ -62,9 +63,12 @@ export default function AppShell({ children }: AppShellProps) {
   // Derived flag for the Updates icon. SC-5 reserves copper for the
   // one-and-only "you have something pending" affordance — we honour
   // that by tinting the icon copper (and adding a soft glow halo)
-  // exclusively for /updates. SC-8 will add a parallel `pending` flag
-  // for /experimental.
+  // exclusively for /updates.
   const updatesPending = useAnyUpdatePending();
+  // SC-8: parallel signal for the Experimental Support item. Copper
+  // means "a listener is currently running" — the state change with
+  // side-effects users want unmistakable feedback on.
+  const experimentalActive = useExperimentalActive();
 
   return (
     <div className="sc-grain min-h-screen flex">
@@ -86,7 +90,10 @@ export default function AppShell({ children }: AppShellProps) {
               item={item}
               active={current === item.route}
               pathname={pathname}
-              pending={item.route === "/updates" && updatesPending}
+              pending={
+                (item.route === "/updates" && updatesPending) ||
+                (item.route === "/experimental" && experimentalActive)
+              }
             />
           ))}
         </nav>
