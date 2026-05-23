@@ -2,7 +2,7 @@ name: Build check
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, "redesign/**"]
 
 concurrency:
   group: build-check-${{ github.ref }}
@@ -48,6 +48,11 @@ jobs:
         shell: pwsh
         working-directory: frontend
         run: pnpm install --frozen-lockfile
+
+      - name: Frontend contract tests (SC-12)
+        shell: pwsh
+        working-directory: frontend
+        run: pnpm test
 
       - name: Build installer
         shell: pwsh
