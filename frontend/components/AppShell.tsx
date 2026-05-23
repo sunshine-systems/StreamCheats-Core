@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { useAnyUpdatePending } from "../lib/hooks/useAnyUpdatePending";
 import { type AppRoute, normalizeRoute, relativeHref } from "../lib/route/href";
 
 interface NavItem {
@@ -58,6 +59,12 @@ export interface AppShellProps {
 export default function AppShell({ children }: AppShellProps) {
   const pathname = usePathname();
   const current = normalizeRoute(pathname);
+  // Derived flag for the Updates icon. SC-5 reserves copper for the
+  // one-and-only "you have something pending" affordance — we honour
+  // that by tinting the icon copper (and adding a soft glow halo)
+  // exclusively for /updates. SC-8 will add a parallel `pending` flag
+  // for /experimental.
+  const updatesPending = useAnyUpdatePending();
 
   return (
     <div className="sc-grain min-h-screen flex">
@@ -79,6 +86,7 @@ export default function AppShell({ children }: AppShellProps) {
               item={item}
               active={current === item.route}
               pathname={pathname}
+              pending={item.route === "/updates" && updatesPending}
             />
           ))}
         </nav>
@@ -94,6 +102,7 @@ export default function AppShell({ children }: AppShellProps) {
             item={BOTTOM_ITEM}
             active={current === BOTTOM_ITEM.route}
             pathname={pathname}
+            pending={false}
           />
         </nav>
       </aside>
@@ -109,10 +118,17 @@ function SidebarItem({
   item,
   active,
   pathname,
+  pending,
 }: {
   item: NavItem;
   active: boolean;
   pathname: string | null;
+  /**
+   * Render the icon in copper to indicate "something to act on" (e.g.
+   * an update is available). Active state still wins for the accent
+   * bar; this only changes the icon color + adds a subtle glow halo.
+   */
+  pending: boolean;
 }) {
   const { Icon, label, route } = item;
   // Plain <a> + relative href: see lib/route/href.ts for why we don't
@@ -130,7 +146,13 @@ function SidebarItem({
         h-11 w-full
         text-[20px]
         transition-colors
-        ${active ? "text-foliage" : "text-ink-dim hover:text-ink-muted"}
+        ${
+          active
+            ? "text-foliage"
+            : pending
+              ? "text-copper hover:text-copper"
+              : "text-ink-dim hover:text-ink-muted"
+        }
       `}
       style={{
         transitionDuration: "var(--sc-dur-quick)",
@@ -151,7 +173,22 @@ function SidebarItem({
           transitionDuration: "var(--sc-dur-quick)",
         }}
       />
-      <Icon size={20} strokeWidth={1.75} aria-hidden="true" />
+      <Icon
+        size={20}
+        strokeWidth={1.75}
+        aria-hidden="true"
+        // Soft copper halo when something is pending. Pure-CSS glow so
+        // we don't pull motion deps into the shell. Suppressed when
+        // the item is the active route to avoid double-emphasis.
+        style={
+          pending && !active
+            ? { filter: "drop-shadow(0 0 6px rgba(213, 130, 88, 0.55))" }
+            : undefined
+        }
+      />
+      {pending && !active ? (
+        <span className="sr-only"> (update pending)</span>
+      ) : null}
 
       {/* Tooltip — hover only, short delay via CSS. JetBrains Mono. */}
       <span
