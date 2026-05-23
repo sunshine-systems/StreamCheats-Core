@@ -11,6 +11,7 @@
 //! the WS upgrade and the asset-URL resolution quirks of `file://`.
 
 pub mod bug_report;
+pub mod experimental;
 pub mod firmware;
 pub mod health;
 pub mod log_stream;
@@ -85,6 +86,17 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/firmware/download", post(firmware::download))
         .route("/api/firmware/flash", post(firmware::flash_stub))
         .route("/api/firmware/flash_local", post(firmware::flash_stub))
+        // Experimental input-API control plane (SC-8). Lets the user
+        // start/stop alternate listeners (today: kmbox-net) from the
+        // Experimental Support page without restarting the daemon.
+        .route("/api/experimental/registry", get(experimental::registry))
+        .route("/api/experimental/status", get(experimental::status))
+        .route(
+            "/api/experimental/set_active",
+            post(experimental::set_active),
+        )
+        .route("/api/experimental/enable", post(experimental::enable))
+        .route("/api/experimental/disable", post(experimental::disable))
         .with_state(state);
 
     match resolve_frontend_dir() {

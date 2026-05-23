@@ -59,6 +59,27 @@ struct RawSettings {
     /// land in [`Settings`] via [`validate`].
     #[serde(default)]
     pub firmware: Option<RawFirmwareSettings>,
+    /// Optional experimental-API control plane settings (SC-8). When
+    /// absent, defaults to disabled with `active = "kmbox-net"` — i.e.
+    /// the kmbox-net listener does NOT auto-start, matching the new
+    /// opt-in model where experimental APIs are off by default and the
+    /// user enables them from the Experimental Support page.
+    #[serde(default)]
+    pub experimental_api: Option<RawExperimentalApiSettings>,
+}
+
+/// Raw on-disk projection of the `experimental_api` settings block.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RawExperimentalApiSettings {
+    /// Whether the listener for `active` should auto-start at daemon
+    /// boot. Defaults to `false` (opt-in).
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// Stable id of the API to host (e.g. `"kmbox-net"`). Persisted
+    /// even when disabled so re-enabling restores the last choice.
+    /// Defaults to `"kmbox-net"`.
+    #[serde(default)]
+    pub active: Option<String>,
 }
 
 /// Raw on-disk projection of the `firmware` settings block.
@@ -116,6 +137,28 @@ pub struct Settings {
     /// Validated firmware updater settings — repo to poll + whether
     /// background auto-checks are on.
     pub firmware: FirmwareSettings,
+    /// Validated experimental-API settings (SC-8). Defaults to
+    /// `enabled = false, active = "kmbox-net"`.
+    pub experimental_api: ExperimentalApiSettings,
+}
+
+/// Resolved experimental-API settings.
+#[derive(Debug, Clone)]
+pub struct ExperimentalApiSettings {
+    /// `true` if the listener for `active` should auto-start at boot.
+    pub enabled: bool,
+    /// Stable id of the chosen API. Validated against the static
+    /// registry on load — an unknown id falls back to `"kmbox-net"`.
+    pub active: String,
+}
+
+impl Default for ExperimentalApiSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            active: crate::experimental::KMBOX_NET_ID.to_string(),
+        }
+    }
 }
 
 /// Resolved firmware updater settings.
@@ -147,6 +190,10 @@ fn default_json() -> &'static str {
         "  \"firmware\": {\n",
         "    \"repo\": \"sunshine-systems/Teensy-Core-1.59.0\",\n",
         "    \"auto_check\": true\n",
+        "  },\n",
+        "  \"experimental_api\": {\n",
+        "    \"enabled\": false,\n",
+        "    \"active\": \"kmbox-net\"\n",
         "  }\n",
         "}\n"
     )
@@ -174,10 +221,7 @@ fn resolve_data_dir(raw: Option<&str>) -> Result<PathBuf> {
 fn parse_mac(s: &str) -> Result<u32> {
     let t = s.trim();
     if t.len() != 8 || !t.chars().all(|c| c.is_ascii_hexdigit()) {
-        bail!(
-            "device_mac must be exactly 8 hex characters (got {:?})",
-            s
-        );
+        bail!("device_mac must be exactly 8 hex characters (got {:?})", s);
     }
     u32::from_str_radix(t, 16).map_err(|e| anyhow!("device_mac hex parse: {}", e))
 }
@@ -186,11 +230,12 @@ fn validate(raw: RawSettings) -> Result<Settings> {
     if raw.listen_addr.trim().is_empty() {
         bail!("listen_addr is required and must be non-empty");
     }
-    let listen_addr: IpAddr = raw
-        .listen_addr
-        .trim()
-        .parse()
-        .with_context(|| format!("listen_addr {:?} is not a valid IP address", raw.listen_addr))?;
+    let listen_addr: IpAddr = raw.listen_addr.trim().parse().with_context(|| {
+        format!(
+            "listen_addr {:?} is not a valid IP address",
+            raw.listen_addr
+        )
+    })?;
 
     let udp_port = match raw.udp_port {
         Some(0) => bail!("udp_port must be 1..=65535"),
@@ -220,7 +265,32 @@ fn validate(raw: RawSettings) -> Result<Settings> {
         enable_file_logging: raw.enable_file_logging.unwrap_or(true),
         experimental_builds: raw.experimental_builds.unwrap_or(false),
         firmware: resolve_firmware(raw.firmware)?,
+        experimental_api: resolve_experimental_api(raw.experimental_api),
     })
+}
+
+/// Apply experimental-API defaults. Unknown ids fall back to
+/// `kmbox-net` (the only currently-known entry) rather than failing
+/// loudly — a typo'd config shouldn't keep the daemon from starting.
+fn resolve_experimental_api(raw: Option<RawExperimentalApiSettings>) -> ExperimentalApiSettings {
+    let raw = raw.unwrap_or_default();
+    let active = raw
+        .active
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| {
+            if crate::experimental::registry::is_known(s) {
+                s.to_string()
+            } else {
+                crate::experimental::KMBOX_NET_ID.to_string()
+            }
+        })
+        .unwrap_or_else(|| crate::experimental::KMBOX_NET_ID.to_string());
+    ExperimentalApiSettings {
+        enabled: raw.enabled.unwrap_or(false),
+        active,
+    }
 }
 
 /// Apply firmware-block defaults. Validates `repo` is in `owner/repo`
@@ -252,6 +322,34 @@ fn resolve_firmware(raw: Option<RawFirmwareSettings>) -> Result<FirmwareSettings
 /// On an unparseable / unreadable existing file we re-write a minimal
 /// JSON document with just the toggle — the next daemon startup will
 /// re-flesh-out the defaults via [`load_or_create`].
+/// Persist the experimental-API selection (SC-8). Same surgical-rewrite
+/// pattern as [`set_experimental_builds`]: read the current
+/// `config.json` (best-effort), mutate exactly the `experimental_api`
+/// block, write it back. Other fields are preserved as-is so hand-
+/// edited values aren't disturbed.
+pub fn set_experimental_api(dir: &Path, active: &str, enabled: bool) -> Result<()> {
+    let path = dir.join(CONFIG_FILENAME);
+    let mut value: serde_json::Value = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|_| serde_json::json!({})),
+        Err(_) => serde_json::json!({}),
+    };
+    let obj = value
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("config.json is not a JSON object"))?;
+    obj.insert(
+        "experimental_api".into(),
+        serde_json::json!({
+            "active": active,
+            "enabled": enabled,
+        }),
+    );
+    let serialised =
+        serde_json::to_string_pretty(&value).context("serialising updated config.json")?;
+    fs::write(&path, format!("{}\n", serialised))
+        .with_context(|| format!("writing updated config to {}", path.display()))?;
+    Ok(())
+}
+
 pub fn set_experimental_builds(dir: &Path, enabled: bool) -> Result<()> {
     let path = dir.join(CONFIG_FILENAME);
     let mut value: serde_json::Value = match fs::read_to_string(&path) {
@@ -384,6 +482,7 @@ mod tests {
             enable_file_logging: None,
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         assert!(validate(raw).is_err());
     }
@@ -399,6 +498,7 @@ mod tests {
             enable_file_logging: None,
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.udp_port, DEFAULT_UDP_PORT);
@@ -419,6 +519,7 @@ mod tests {
             enable_file_logging: None,
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_timing_logs);
@@ -439,6 +540,7 @@ mod tests {
             enable_file_logging: None,
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         let s = validate(raw).unwrap();
         assert!(s.enable_file_logging);
@@ -458,6 +560,7 @@ mod tests {
             enable_file_logging: Some(false),
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         let s = validate(raw).unwrap();
         assert!(!s.enable_file_logging);
@@ -474,6 +577,7 @@ mod tests {
             enable_file_logging: Some(true),
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         let s = validate(raw).unwrap();
         assert_eq!(s.data_dir, PathBuf::from("C:/tmp/streamcheats-test"));
@@ -491,6 +595,7 @@ mod tests {
             enable_file_logging: None,
             experimental_builds: None,
             firmware: None,
+            experimental_api: None,
         };
         assert!(!validate(raw).unwrap().experimental_builds);
 
@@ -503,6 +608,7 @@ mod tests {
             enable_file_logging: None,
             experimental_builds: Some(true),
             firmware: None,
+            experimental_api: None,
         };
         assert!(validate(raw_on).unwrap().experimental_builds);
     }

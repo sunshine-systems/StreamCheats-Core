@@ -66,7 +66,9 @@ pub fn build_bundle(state: &AppState) -> Result<Bundle, BugReportError> {
     let monitor_subscribers = state.peer_registry.list_peers().len();
 
     // --- info.txt ---
-    let uptime_seconds = now_instant.saturating_duration_since(state.started_at).as_secs();
+    let uptime_seconds = now_instant
+        .saturating_duration_since(state.started_at)
+        .as_secs();
     let log_dir_total_bytes = system_info::log_dir_total_bytes(&state.log_dir);
     let log_drop_count = state.file_log_drops.load(Ordering::Relaxed);
     let info_text = system_info::render(&system_info::SystemInfo {
@@ -160,7 +162,10 @@ struct ManifestEntry {
 /// alone) because it documents which fields are load-bearing.
 #[allow(dead_code)]
 pub(crate) fn _doc_inputs() -> (&'static str, &'static str) {
-    ("AppState built in main.rs::run()", "see http::state::AppState")
+    (
+        "AppState built in main.rs::run()",
+        "see http::state::AppState",
+    )
 }
 
 /// Helper kept private to satisfy the unused-import lint if a future
@@ -173,8 +178,8 @@ mod tests {
     use super::*;
     use crate::http::state::{AppState, LogDropCounter};
     use crate::kmbox_net::monitor::PeerRegistry;
-    use crate::streamcheats::{DeviceController, EventBus};
-    use crate::util::translator::SerialTxHolder;
+    use crate::streamcheats::{DeviceController, EventBus, MaskController};
+    use crate::util::translator::{SerialTxHolder, Translator};
     use std::io::Cursor;
     use std::sync::{Arc, Mutex};
     use zip::ZipArchive;
@@ -186,9 +191,28 @@ mod tests {
         std::fs::create_dir_all(&cwd).unwrap();
         let log_dir = tmp_root.join("logs");
         std::fs::create_dir_all(&log_dir).unwrap();
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let peer_registry = PeerRegistry::new();
+        let mask_controller = Arc::new(MaskController::new(device.clone(), running.clone()));
+        let translator = Arc::new(Translator::new(
+            0x01FBC068,
+            false,
+            device.clone(),
+            peer_registry.clone(),
+            mask_controller,
+        ));
+        let experimental = crate::experimental::Manager::new(
+            crate::experimental::KMBOX_NET_ID.to_string(),
+            false,
+            translator,
+            "127.0.0.1".parse().unwrap(),
+            0,
+            running.clone(),
+            cwd.clone(),
+        );
         AppState {
             device,
-            peer_registry: PeerRegistry::new(),
+            peer_registry,
             file_logging_enabled: file_logging,
             data_dir: tmp_root.clone(),
             log_dir,
@@ -205,7 +229,8 @@ mod tests {
                 false,
                 crate::firmware::device::LastHeartbeat::new(),
             )),
-            running: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            experimental,
+            running,
         }
     }
 

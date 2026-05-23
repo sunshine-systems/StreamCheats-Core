@@ -192,11 +192,47 @@ pub fn takeover_if_running() -> TakeoverOutcome {
 /// Atomically (`write to *.tmp` + `rename`) publish the PID and port to
 /// the well-known files in [`std::env::temp_dir`]. Called immediately
 /// after a successful UDP `bind()` so the published port is real.
+///
+/// SC-8 split this into [`write_pid_only`] + [`write_port`] because
+/// the kmbox-net listener's lifecycle (and therefore the bound UDP
+/// port) is now independent of the daemon's lifecycle. The combined
+/// helper is retained for back-compat with any external callers and
+/// for tests.
+#[allow(dead_code)]
 pub fn write_pid_and_port(port: u16) -> std::io::Result<()> {
     let pid = std::process::id();
     write_atomic(&pid_path(), pid.to_string().as_bytes())?;
     write_atomic(&port_path(), port.to_string().as_bytes())?;
     Ok(())
+}
+
+/// Atomically publish the daemon's PID without touching the UDP port
+/// file. Used at startup when the kmbox-net listener is not yet active
+/// (SC-8: the listener is now controlled by the experimental manager
+/// and may be disabled at boot) — the PID still needs to be published
+/// so single-instance takeover works.
+pub fn write_pid_only() -> std::io::Result<()> {
+    let pid = std::process::id();
+    write_atomic(&pid_path(), pid.to_string().as_bytes())
+}
+
+/// Atomically publish the UDP port the kmbox-net listener bound to.
+/// Called from the listener startup path, separately from the PID
+/// write so the two lifecycles can move independently.
+pub fn write_port(port: u16) -> std::io::Result<()> {
+    write_atomic(&port_path(), port.to_string().as_bytes())
+}
+
+/// Best-effort removal of the UDP port file. Called when the kmbox-net
+/// listener stops so consumers don't see a stale port for a no-longer-
+/// bound socket. Missing-file errors are mapped to `Ok(())` because the
+/// post-condition (port file absent) holds either way.
+pub fn clear_port() -> std::io::Result<()> {
+    match fs::remove_file(port_path()) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
 }
 
 /// Atomically publish the HTTP port. Called after the axum server has

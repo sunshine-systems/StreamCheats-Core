@@ -92,6 +92,7 @@
 //! [`HEARTBEAT_INTERVAL`]: crate::streamcheats::heartbeat::HEARTBEAT_INTERVAL
 //! [`SerialTxHolder`]: crate::util::translator::SerialTxHolder
 
+mod experimental;
 mod firmware;
 mod http;
 mod kmbox_net;
@@ -102,7 +103,7 @@ mod util;
 
 use std::env;
 use std::fs;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -227,9 +228,9 @@ fn init_logging(settings: &Settings) -> (Option<PathBuf>, LogStreamHandles) {
                     // starts. Use eprintln! because tracing isn't
                     // initialised yet.
                     eprintln!(
-                        "warning: could not initialise file logger ({}); continuing with stdout only",
-                        e
-                    );
+                    "warning: could not initialise file logger ({}); continuing with stdout only",
+                    e
+                );
                     None
                 }
             }
@@ -315,8 +316,7 @@ fn setup_file_appender(
     // see exactly the same events. Built fresh here (rather than
     // cloned) because EnvFilter doesn't implement Clone on all
     // versions and re-parsing is cheap and identical.
-    let file_filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let layer = tracing_subscriber::fmt::layer()
         .with_target(false)
         .with_ansi(false)
@@ -341,9 +341,7 @@ fn main() -> ExitCode {
         Ok(LoadOutcome::WroteDefault { path, reason }) => {
             match reason {
                 None => {
-                    println!(
-                        "Created default config.json — please edit listen_addr, then re-run."
-                    );
+                    println!("Created default config.json — please edit listen_addr, then re-run.");
                 }
                 Some(r) => {
                     println!(
@@ -564,58 +562,27 @@ fn run(
         }
     }
 
+    // SC-8: the UDP socket binding + recv loop moved into the
+    // `experimental::Manager` (it owns the kmbox-net listener). At
+    // boot we just publish the daemon PID so single-instance takeover
+    // keeps working — the port file is written/cleared by the listener
+    // start/stop lifecycle. `bind` is the *configured* address; the
+    // actually-bound address (after `port == 0` resolution) is
+    // discoverable via `GET /api/experimental/status` while the
+    // listener is up.
     let bind: SocketAddr = SocketAddr::new(settings.listen_addr, settings.udp_port);
-    let socket = UdpSocket::bind(bind)
-        .with_context(|| format!("binding UDP socket at {}", bind))?;
-
-    // Bump SO_RCVBUF from the OS default (~64KB on Windows) to 256KB.
-    // Default headroom is ~900 packets at 72 bytes; 256KB is ~3600 packets,
-    // closing the burst-overflow window described in the UDP analysis.
-    // Use socket2::SockRef so we don't need raw FD/HANDLE casts — it borrows
-    // from the std UdpSocket and exposes the cross-platform setter.
-    // Failure is non-fatal: log a warning and continue with the OS default.
-    {
-        let sock_ref = socket2::SockRef::from(&socket);
-        let desired = 256 * 1024; // 256 KiB = 4x Windows default
-        if let Err(e) = sock_ref.set_recv_buffer_size(desired) {
-            warn!(
-                "could not bump SO_RCVBUF to {} bytes: {} (continuing with OS default)",
-                desired, e
-            );
-        } else {
-            let actual = sock_ref.recv_buffer_size().unwrap_or(0);
-            info!(
-                "udp: recv buffer set to {} bytes (requested {})",
-                actual, desired
-            );
-        }
-    }
-
-    socket
-        .set_read_timeout(Some(Duration::from_millis(250)))
-        .context("setting UDP read timeout")?;
-
-    // Publish our PID and the port we ACTUALLY bound. The bound port
-    // may differ from `settings.udp_port` if the user set 0 to request
-    // an ephemeral assignment, so we read it back off the socket
-    // rather than echoing the config.
-    let bound_port = socket
-        .local_addr()
-        .map(|a| a.port())
-        .unwrap_or(settings.udp_port);
-    if let Err(e) = daemon::write_pid_and_port(bound_port) {
-        warn!("daemon: could not write pid/port files: {}", e);
+    if let Err(e) = daemon::write_pid_only() {
+        warn!("daemon: could not write pid file: {}", e);
     } else {
         info!(
-            "daemon: pid={} port={} tmpdir={}",
+            "daemon: pid={} tmpdir={}",
             std::process::id(),
-            bound_port,
             std::env::temp_dir().display()
         );
     }
 
     info!(
-        "Listening on {}:{}, mac={}",
+        "Configured kmbox-net listener for {}:{}, mac={} (start gated by experimental_api.enabled)",
         settings.listen_addr, settings.udp_port, settings.device_mac_str
     );
 
@@ -720,12 +687,26 @@ fn run(
     // `running` flag so the pump exits on Ctrl+C.
     let mask_controller = Arc::new(MaskController::new(device.clone(), running.clone()));
 
-    let translator = Translator::new(
+    let translator = Arc::new(Translator::new(
         settings.device_mac,
         settings.enable_timing_logs,
         device.clone(),
         monitor_registry.clone(),
         mask_controller.clone(),
+    ));
+
+    // SC-8: experimental control plane owns the kmbox-net listener.
+    // Built BEFORE the HTTP server so AppState can carry it; booted
+    // AFTER the HTTP server starts so a failed bind is visible via
+    // `GET /api/experimental/status` immediately on first poll.
+    let experimental_manager = crate::experimental::Manager::new(
+        settings.experimental_api.active.clone(),
+        settings.experimental_api.enabled,
+        translator.clone(),
+        settings.listen_addr,
+        settings.udp_port,
+        running.clone(),
+        cwd_for_http.clone(),
     );
 
     // -----------------------------------------------------------------
@@ -743,7 +724,9 @@ fn run(
         }
         None => http::state::LogDropCounter::zero(),
     };
-    let http_log_dir = logs_dir_for_http.clone().unwrap_or_else(|| settings.data_dir.join("logs"));
+    let http_log_dir = logs_dir_for_http
+        .clone()
+        .unwrap_or_else(|| settings.data_dir.join("logs"));
     // In-app updater. Polls GitHub releases on a 6h cadence and
     // exposes status to the UI via `/api/updates/*`. The Arc lives in
     // AppState; the poller task is spawned inside the HTTP runtime.
@@ -771,6 +754,7 @@ fn run(
         log_stream: Some(log_stream_handles),
         updater: updater_handle.clone(),
         firmware: firmware_handle.clone(),
+        experimental: experimental_manager.clone(),
         running: running.clone(),
     };
     let http_handle = http::spawn_http_server(http_state_template, running.clone());
@@ -780,29 +764,24 @@ fn run(
         warn!("http: bug-report endpoint disabled (server failed to start)");
     }
 
-    let mut buf = [0u8; 2048];
+    // Boot the experimental manager — starts the kmbox-net listener
+    // iff `config.experimental_api.enabled == true`. Listener failure
+    // is recorded as `last_error` on the manager and surfaced via the
+    // UI; the daemon stays up either way.
+    experimental_manager.boot();
+
+    // Main loop: nothing to do except wait for shutdown. The UDP recv
+    // loop now lives inside the kmbox-net listener thread (managed by
+    // `experimental_manager`); everything else is event-driven on its
+    // own thread.
     while running.load(Ordering::SeqCst) {
-        match socket.recv_from(&mut buf) {
-            Ok((n, peer)) => {
-                let datagram = &buf[..n];
-                if let Some(reply) = translator.handle_packet(datagram, peer) {
-                    if let Err(e) = socket.send_to(&reply, peer) {
-                        warn!("failed to send reply to {}: {}", peer, e);
-                    }
-                }
-            }
-            Err(e) => match e.kind() {
-                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                    // timeout — loop and re-check `running`.
-                }
-                _ => {
-                    warn!("recv_from error: {}", e);
-                }
-            },
-        }
+        thread::sleep(Duration::from_millis(250));
     }
 
     info!("shutdown requested — closing serial and exiting");
+    // Stop the experimental listener (if any) so the kmbox-net UDP
+    // socket is released before we tear the rest of the world down.
+    experimental_manager.shutdown();
     // Report whether the lossy file appender ever had to drop lines
     // during this run. Non-zero means a sustained log burst exceeded
     // the 128k-line buffer (see init_logging contract). Zero is the
