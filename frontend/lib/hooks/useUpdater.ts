@@ -54,6 +54,13 @@ export function useUpdater() {
 
   useEffect(() => {
     cancelledRef.current = false;
+    // Initial refresh on mount is intentional — we want the banner /
+    // settings to reflect the daemon's current updater state without
+    // waiting POLL_INTERVAL_MS for the first interval tick. The
+    // setState-in-effect rule fires because refresh() calls setState
+    // synchronously after a fetch; the cascade is gated by the
+    // network round-trip and `cancelledRef`, not a render loop.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refresh();
     const id = setInterval(refresh, POLL_INTERVAL_MS);
     return () => {

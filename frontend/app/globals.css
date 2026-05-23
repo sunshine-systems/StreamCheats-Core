@@ -1,13 +1,221 @@
-/* ============================================================
-   StreamCheats Core — design tokens.
-   Industrial / hardware-diagnostic aesthetic. Dark, technical,
-   honest about its purpose: this is a daemon control surface
-   for a USB HID bridge, not a SaaS dashboard.
-   ============================================================ */
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────
+   StreamCheats Core — design tokens
+   Ported verbatim from streamcheats-marketing/app-v2/src/app/globals.css
+   so the app and the marketing site read as one brand. See the marketing
+   repo's DESIGN.md for the rationale behind every value.
+
+   Palette anchors (from the cat-mark logo):
+     --sc-substrate-deep #041F0C  body of the cat - deepest brand green
+     --sc-accent         #27C16B  eyes of the cat - vibrant CTA green
+   Warm counter: copper / patinated metal (#D58258).
+   Body inks chosen for ≥4.5:1 against panel surfaces (WCAG AA).
+
+   App-specific translation (vs marketing): JetBrains Mono for chrome,
+   Fraunces reserved for page titles + occasional eyebrows, Inter Tight
+   for dense panels. Copper is used sparingly — only on the Updates
+   icon when an update is pending and Experimental Support status chips.
+   ───────────────────────────────────────────────────────────── */
 
 :root {
-  /* --- surfaces ------------------------------------------- */
-  --kx-bg:            #0a0c10;   /* page */
+  /* ── Logo anchors ── */
+  --sc-substrate-deep: #041F0C;
+  --sc-accent:         #27C16B;
+
+  /* ── Surfaces ── */
+  --sc-substrate:     #0E1411;
+  --sc-substrate-2:   #13201A;
+  --sc-panel:         #182B22;
+  --sc-panel-2:       #213D30;
+  --sc-hairline:      #243B2D;
+  --sc-hairline-2:    #34614A;
+
+  /* ── Foliage greens ── */
+  --sc-foliage:       #27C16B;
+  --sc-foliage-soft:  #5BD493;
+  --sc-foliage-pale:  #A9E8C4;
+
+  /* ── Inks (AA-verified against panel) ── */
+  --sc-ink:           #E8EFE9;
+  --sc-ink-muted:     #B5C2BA;
+  --sc-ink-dim:       #909E96;
+
+  /* ── Copper (single warm accent) ── */
+  --sc-copper:        #D58258;
+  --sc-copper-dim:    #A86038;
+
+  /* ── Status ── */
+  --sc-warn:          #D4A857;
+  --sc-danger:        #C46A6A;
+
+  /* ── Motion ── */
+  --sc-ease-out:      cubic-bezier(0.22, 1, 0.36, 1);
+  --sc-ease-in-out:   cubic-bezier(0.65, 0, 0.35, 1);
+  --sc-dur-quick:     180ms;
+  --sc-dur-base:      320ms;
+  --sc-dur-settle:    500ms;
+  --sc-dur-piece:     720ms;
+
+  /* ── Type ── */
+  --sc-tracking-display: -0.02em;
+  --sc-tracking-chrome:  0.12em;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Tailwind v4 theme bridge — exposes CSS vars to utility classes
+   (bg-panel, text-foliage, border-hairline, text-copper, etc.).
+   ───────────────────────────────────────────────────────────── */
+@theme inline {
+  --color-background:     var(--sc-substrate);
+  --color-foreground:     var(--sc-ink);
+
+  --color-substrate:      var(--sc-substrate);
+  --color-substrate-2:    var(--sc-substrate-2);
+  --color-panel:          var(--sc-panel);
+  --color-panel-2:        var(--sc-panel-2);
+  --color-hairline:       var(--sc-hairline);
+  --color-hairline-2:     var(--sc-hairline-2);
+
+  --color-foliage:        var(--sc-foliage);
+  --color-foliage-soft:   var(--sc-foliage-soft);
+  --color-foliage-pale:   var(--sc-foliage-pale);
+
+  --color-ink:            var(--sc-ink);
+  --color-ink-muted:      var(--sc-ink-muted);
+  --color-ink-dim:        var(--sc-ink-dim);
+
+  --color-copper:         var(--sc-copper);
+  --color-copper-dim:     var(--sc-copper-dim);
+
+  --color-warn:           var(--sc-warn);
+  --color-danger:         var(--sc-danger);
+
+  --font-display: var(--font-fraunces);
+  --font-sans:    var(--font-inter-tight);
+  --font-mono:    var(--font-jetbrains-mono);
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+
+html {
+  background: var(--sc-substrate);
+  color: var(--sc-ink);
+}
+
+body {
+  background: var(--sc-substrate);
+  color: var(--sc-ink);
+  font-family: var(--font-inter-tight), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  min-height: 100vh;
+}
+
+/* ───── Background atmosphere ───── */
+.sc-grain::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.04;
+  mix-blend-mode: screen;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 240 240' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+@media (max-width: 768px) {
+  .sc-grain::before { opacity: 0.025; }
+}
+
+.sc-well {
+  position: relative;
+  isolation: isolate;
+}
+.sc-well::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 70% 55% at 50% 35%,
+      rgba(52, 97, 74, 0.28) 0%,
+      rgba(19, 32, 26, 0.0) 70%),
+    radial-gradient(ellipse 90% 60% at 50% 100%,
+      rgba(14, 20, 17, 1) 0%,
+      rgba(14, 20, 17, 0) 60%);
+}
+
+/* ───── Hairline divider ───── */
+.sc-hairline {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(52, 97, 74, 0.45) 30%,
+    rgba(169, 232, 196, 0.55) 50%,
+    rgba(52, 97, 74, 0.45) 70%,
+    transparent
+  );
+}
+
+/* ───── Focus ring ───── */
+:where(a, button, input, textarea, select, [tabindex]):focus-visible {
+  outline: 2px solid var(--sc-foliage);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* ───── Selection ───── */
+::selection {
+  background: rgba(195, 224, 203, 0.22);
+  color: var(--sc-foliage-pale);
+}
+
+/* ───── Scrollbar ───── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--sc-substrate); }
+::-webkit-scrollbar-thumb { background: var(--sc-hairline); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--sc-hairline-2); }
+
+/* ───── Reduced motion ───── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ───── Display + chrome utilities ───── */
+.sc-display {
+  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-optical-sizing: auto;
+  font-variation-settings: "SOFT" 50, "WONK" 0;
+  letter-spacing: var(--sc-tracking-display);
+}
+
+.sc-chrome {
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  font-feature-settings: "calt", "ss01";
+  letter-spacing: var(--sc-tracking-chrome);
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Legacy kx-* tokens — kept temporarily so the existing log
+   viewport / connection-status / update banner / etc components
+   keep rendering while sub-issues (SC-7/8/9/11) rewrite them
+   against the SC tokens above. New code MUST use SC tokens.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --kx-bg:            #0a0c10;
   --kx-bg-grid:       rgba(122, 240, 200, 0.045);
   --kx-surface:       #13161c;
   --kx-surface-2:     #1b1f27;
@@ -16,22 +224,16 @@
   --kx-border-strong: #2f3744;
   --kx-border-glow:   rgba(122, 240, 200, 0.28);
 
-  /* --- text ---------------------------------------------- */
   --kx-fg:            #e6e9ef;
   --kx-fg-2:          #aeb6c4;
   --kx-fg-3:          #8b95a7;
   --kx-fg-muted:      #5a6373;
   --kx-fg-dim:        #3f4756;
 
-  /* --- accents ------------------------------------------- */
-  /* Mint/cyan is THE accent — used sparingly. Sharp, technical,
-     reads as "live data" on a black scope screen. */
   --kx-accent:        #7af0c8;
   --kx-accent-soft:   rgba(122, 240, 200, 0.14);
   --kx-accent-press:  #5fd9af;
 
-  /* Warm amber for the primary CTA — contrasts the mint, keeps
-     "action" visually separate from "status". */
   --kx-action:        #ffb86b;
   --kx-action-press:  #f0a14d;
   --kx-action-fg:     #1a1408;
@@ -41,8 +243,7 @@
   --kx-danger:        #ff6b7a;
   --kx-danger-soft:   rgba(255, 107, 122, 0.14);
 
-  /* --- typography ---------------------------------------- */
-  --kx-font-sans:  var(--font-space-grotesk), "Space Grotesk", system-ui, sans-serif;
+  --kx-font-sans:  var(--font-inter-tight), "Inter Tight", system-ui, sans-serif;
   --kx-font-mono:  var(--font-jetbrains-mono), "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
   --kx-fs-12: 0.75rem;
@@ -53,7 +254,6 @@
   --kx-fs-28: 1.75rem;
   --kx-fs-40: 2.5rem;
 
-  /* --- spacing (4px base) -------------------------------- */
   --kx-sp-1: 4px;
   --kx-sp-2: 8px;
   --kx-sp-3: 12px;
@@ -63,64 +263,17 @@
   --kx-sp-7: 48px;
   --kx-sp-8: 64px;
 
-  /* --- radii --------------------------------------------- */
   --kx-r-sm: 3px;
   --kx-r-md: 6px;
   --kx-r-lg: 10px;
   --kx-r-pill: 999px;
 
-  /* --- shadows / motion ---------------------------------- */
   --kx-shadow-1: 0 1px 0 rgba(255, 255, 255, 0.03) inset,
                  0 8px 24px rgba(0, 0, 0, 0.35);
   --kx-shadow-glow: 0 0 0 1px var(--kx-border-glow),
                     0 8px 32px rgba(122, 240, 200, 0.08);
   --kx-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
 }
-
-* {
-  box-sizing: border-box;
-}
-
-html, body {
-  margin: 0;
-  padding: 0;
-}
-
-html {
-  background: var(--kx-bg);
-  color: var(--kx-fg);
-  font-family: var(--kx-font-sans);
-  font-size: 16px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-rendering: optimizeLegibility;
-}
-
-body {
-  min-height: 100vh;
-  background:
-    /* subtle scope-grid — 24px squares, mint at very low alpha */
-    linear-gradient(var(--kx-bg-grid) 1px, transparent 1px) 0 0 / 24px 24px,
-    linear-gradient(90deg, var(--kx-bg-grid) 1px, transparent 1px) 0 0 / 24px 24px,
-    radial-gradient(
-      ellipse 800px 600px at 85% -10%,
-      rgba(122, 240, 200, 0.05),
-      transparent 60%
-    ),
-    radial-gradient(
-      ellipse 700px 500px at -10% 110%,
-      rgba(255, 184, 107, 0.04),
-      transparent 60%
-    ),
-    var(--kx-bg);
-}
-
-/* ============================================================
-   Utility-ish atoms used in multiple components.
-   Kept in globals so they share the token system without
-   pulling in a CSS framework.
-   ============================================================ */
 
 .kx-eyebrow {
   text-transform: uppercase;
@@ -149,9 +302,6 @@ body {
   margin: var(--kx-sp-4) 0;
 }
 
-/* Diagonal accent line — used in the page header to break the
-   strict grid (per skill: "embrace asymmetry, diagonal flow,
-   grid-breaking elements"). Pure CSS, no SVG payload. */
 .kx-diag-rule {
   position: relative;
   height: 1px;
@@ -176,7 +326,6 @@ body {
   pointer-events: none;
 }
 
-/* Reveal-on-load: staggered via animation-delay on each element. */
 @keyframes kx-rise {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -185,22 +334,7 @@ body {
   animation: kx-rise 480ms var(--kx-ease) both;
 }
 
-/* Slow pulse for the connected-status dot — reads as a heartbeat. */
 @keyframes kx-pulse {
   0%, 100% { box-shadow: 0 0 0 0 var(--kx-accent-soft); }
   50%      { box-shadow: 0 0 0 6px transparent; }
 }
-
-::selection {
-  background: var(--kx-accent);
-  color: var(--kx-bg);
-}
-
-/* Native scrollbar dressing (only renders if scroll is needed). */
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb {
-  background: var(--kx-surface-3);
-  border-radius: var(--kx-r-pill);
-  border: 2px solid var(--kx-bg);
-}
-::-webkit-scrollbar-thumb:hover { background: var(--kx-border-strong); }
