@@ -39,10 +39,7 @@ pub async fn check(State(state): State<AppState>) -> Json<serde_json::Value> {
 pub async fn download(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     match state.updater.start_download().await {
         Ok(()) => (StatusCode::ACCEPTED, Json(json!({"ok": true}))),
-        Err(e) => (
-            StatusCode::CONFLICT,
-            Json(json!({"ok": false, "error": e})),
-        ),
+        Err(e) => (StatusCode::CONFLICT, Json(json!({"ok": false, "error": e}))),
     }
 }
 
@@ -51,7 +48,10 @@ pub async fn download(State(state): State<AppState>) -> (StatusCode, Json<serde_
 pub async fn install(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
     match state.updater.install_now().await {
         Ok(path) => {
-            info!("updater: installer launched ({}) — signalling daemon shutdown", path.display());
+            info!(
+                "updater: installer launched ({}) — signalling daemon shutdown",
+                path.display()
+            );
             // Brief delay before flipping `running` so this HTTP
             // response makes it back to the client before the server
             // begins tearing down.
@@ -67,10 +67,7 @@ pub async fn install(State(state): State<AppState>) -> (StatusCode, Json<serde_j
         }
         Err(e) => {
             warn!("updater: install failed: {}", e);
-            (
-                StatusCode::CONFLICT,
-                Json(json!({"ok": false, "error": e})),
-            )
+            (StatusCode::CONFLICT, Json(json!({"ok": false, "error": e})))
         }
     }
 }

@@ -52,6 +52,11 @@
       {
         "from": "../frontend/out",
         "to": "frontend"
+      },
+      {
+        "from": "../backend/vendor",
+        "to": "vendor",
+        "filter": ["**/*"]
       }
     ],
     "win": {

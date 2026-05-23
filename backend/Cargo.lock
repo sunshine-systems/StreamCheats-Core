@@ -1454,6 +1454,7 @@ dependencies = [
  "sha2",
  "socket2 0.5.10",
  "sysinfo",
+ "thiserror 1.0.69",
  "tokio",
  "tower-http 0.5.2",
  "tracing",

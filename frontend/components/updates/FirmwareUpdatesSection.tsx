@@ -2,27 +2,44 @@
 
 // Updates page > Firmware section.
 //
-// Drives off two SC-10 endpoints:
-//   GET /api/firmware/status  -> installed version + state machine
-//   GET /api/firmware/releases -> full release list (sorted newest-first)
+// Drives off three SC-10 endpoints + two SC-13 endpoints:
+//   GET  /api/firmware/status       — installed version + state machine
+//   GET  /api/firmware/releases     — full release list (sorted newest-first)
+//   POST /api/firmware/check        — re-poll GitHub now
+//   POST /api/firmware/download     — start downloading a release
+//   POST /api/firmware/flash        — flash a previously-downloaded release (SC-13)
+//   POST /api/firmware/flash_local  — flash an arbitrary local .hex (SC-13)
 //
 // Composition:
-//   1. Installed firmware card (mirrors the software section's shape
-//      so the page reads as one rhythm).
-//   2. Update banner — only rendered when state is available /
-//      downloading / ready / failed.
-//   3. Searchable / filterable releases list with channel chips +
-//      substring search across version + commit.
-//   4. Manual flash file picker stub (Flash is wired in SC-13).
+//   1. Installed firmware card (mirrors the software section's shape).
+//   2. Update banner — only rendered when state is available / ready / failed.
+//   3. Active flash card — only rendered when state is flashing.
+//   4. Searchable / filterable releases list.
+//   5. Manual flash card with a native (Electron) .hex picker.
 //
-// All flash interactions probe the 501 stubs and surface a clear
-// "Coming in SC-13" message — the UI is shape-complete today and
-// becomes functional once SC-13 wires teensy_loader_cli.
+// Flash UX (SC-13):
+//   * Clicking Flash on a row OR on the AvailableBanner triggers a
+//     confirmation modal first. The modal shows the version delta
+//     (downgrades are called out in copper). The action button reads
+//     "I understand, flash" — typed-confirm felt heavy for a normal
+//     up-version flash where downgrade-warning language doesn't apply.
+//   * Manual flash uses the same modal with stronger copy about
+//     unsigned-firmware risk.
+//   * While state.kind === "flashing", buttons are disabled across
+//     the section and an "elapsed time" stripe shows above the list.
 
-import { useMemo, useState, type ChangeEvent } from "react";
 import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
+import {
+  AlertTriangle,
   Download,
   HardDrive,
+  Loader2,
   RefreshCw,
   RotateCcw,
   Search,
@@ -37,6 +54,7 @@ import { useUpdater } from "../../lib/hooks/useUpdater";
 import {
   flash,
   flashLocal,
+  pickHexFile,
   type FirmwareReleaseEntry,
   type FlashResult,
 } from "../../lib/api/firmware";
@@ -61,6 +79,8 @@ function chipForKind(kind: string | undefined): {
       return { tone: "foliage", label: "Downloading" };
     case "ready":
       return { tone: "copper", label: "Ready to flash" };
+    case "flashing":
+      return { tone: "copper", label: "Flashing" };
     case "failed":
       return { tone: "danger", label: "Failed" };
     default:
@@ -99,14 +119,20 @@ function formatBytes(bytes: number | undefined | null): string {
 function flashErrorCopy(result: FlashResult): string {
   if (result.ok) return "";
   switch (result.reason) {
-    case "not_implemented":
-      return "Flash integration is coming in SC-13. The button surface is in place; the daemon command isn't wired yet.";
-    case "device_not_connected":
-      return "Connect your StreamCheats device first — no heartbeat detected.";
-    case "hex_not_downloaded":
-      return "Download the firmware first, then flash.";
-    case "already_flashing":
+    case "flash_in_progress":
       return "Another flash is already in progress.";
+    case "hex_not_downloaded":
+      return "Download this release first, then flash.";
+    case "unknown_version":
+      return "Couldn't find that release in the daemon's cache.";
+    case "unsupported_board":
+      return "This board isn't supported by the bundled flasher yet.";
+    case "invalid_hex":
+      return result.detail
+        ? `Hex file rejected: ${result.detail}`
+        : "Hex file rejected — must exist, be non-empty, and end in .hex.";
+    case "not_implemented":
+      return "Flash endpoint isn't wired in this daemon build.";
     case "network":
       return "Couldn't reach the daemon. Is StreamCheats running?";
     default:
@@ -114,12 +140,38 @@ function flashErrorCopy(result: FlashResult): string {
   }
 }
 
+// Parse "rel-5.17" / "rel-5.17-ca8298b" → { major, minor }.
+function parseRelMajorMinor(
+  version: string | null | undefined
+): { major: number; minor: number } | null {
+  if (!version) return null;
+  const stripped = version.replace(/^rel-/, "");
+  const base = stripped.split("-")[0]; // drop nightly commit
+  const [maj, min] = base.split(".").map((n) => Number.parseInt(n, 10));
+  if (Number.isNaN(maj) || Number.isNaN(min)) return null;
+  return { major: maj, minor: min };
+}
+
+/**
+ * Is `target` strictly older than `installed`? Major.minor compare,
+ * commit suffix ignored. Returns false when either is unparseable.
+ */
+function isDowngrade(
+  installed: string | null | undefined,
+  target: string | null | undefined
+): boolean {
+  const a = parseRelMajorMinor(installed);
+  const b = parseRelMajorMinor(target);
+  if (!a || !b) return false;
+  if (b.major < a.major) return true;
+  if (b.major === a.major && b.minor < a.minor) return true;
+  return false;
+}
+
 export default function FirmwareUpdatesSection() {
   const { status, busy, loaded, runCheck, runDownload } = useFirmwareStatus();
   const { releases, loaded: releasesLoaded, refresh: refreshReleases } =
     useFirmwareReleases();
-  // Reuse the existing experimental_builds flag so the nightly chip
-  // visibility is consistent with the software section's gate.
   const { experimental } = useUpdater();
 
   const state = status?.state;
@@ -128,15 +180,52 @@ export default function FirmwareUpdatesSection() {
   const installedChannel = status?.channel ?? "unknown";
   const board = status?.board ?? null;
   const chip = chipForKind(kind);
+  const flashing = kind === "flashing";
+
+  // Modal-driven flash confirmation. Holds the pending intent until
+  // the user confirms or cancels.
+  const [confirm, setConfirm] = useState<FlashConfirmIntent | null>(null);
+  const [flashError, setFlashError] = useState<string | null>(null);
+  const [flashOk, setFlashOk] = useState<string | null>(null);
+
+  // Detect a flashing → up_to_date transition by stashing the previous
+  // kind in component state. `setPrevKind` during render is the
+  // documented React pattern for cheap derived-state updates, and is
+  // preferable to a useEffect here (we want the success banner up on
+  // the same paint that the state machine transitions).
+  const [prevKind, setPrevKind] = useState<string | undefined>(undefined);
+  if (prevKind !== kind) {
+    setPrevKind(kind);
+    if (prevKind === "flashing" && kind === "up_to_date") {
+      setFlashOk("Flash complete.");
+    } else if (kind === "flashing" && flashOk) {
+      setFlashOk(null);
+    }
+  }
+
+  const onCheck = async () => {
+    await runCheck();
+    await refreshReleases();
+  };
+
+  const onConfirm = useCallback(async () => {
+    if (!confirm) return;
+    setFlashError(null);
+    setFlashOk(null);
+    const r =
+      confirm.kind === "release"
+        ? await flash(confirm.version)
+        : await flashLocal(confirm.path);
+    setConfirm(null);
+    if (!r.ok) {
+      setFlashError(flashErrorCopy(r));
+    }
+  }, [confirm]);
 
   // Filter state
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("stable");
   const [search, setSearch] = useState("");
 
-  // Derive the *effective* channel filter rather than syncing into
-  // state via an effect. If the user disabled experimental_builds in
-  // another surface, a stored "nightly" selection is silently treated
-  // as "stable" until they pick again — no cascading render.
   const effectiveChannelFilter: ChannelFilter =
     !experimental && channelFilter === "nightly" ? "stable" : channelFilter;
 
@@ -157,16 +246,8 @@ export default function FirmwareUpdatesSection() {
     });
   }, [releases, effectiveChannelFilter, search, experimental]);
 
-  const onCheck = async () => {
-    await runCheck();
-    await refreshReleases();
-  };
-
   return (
-    <section
-      aria-label="Firmware updates"
-      className="flex flex-col gap-4"
-    >
+    <section aria-label="Firmware updates" className="flex flex-col gap-4">
       <header className="flex items-center justify-between gap-3 flex-wrap">
         <Eyebrow>firmware</Eyebrow>
         <StateChip tone={chip.tone}>{chip.label}</StateChip>
@@ -177,7 +258,7 @@ export default function FirmwareUpdatesSection() {
         installedVersion={installedVersion}
         installedChannel={installedChannel}
         board={board}
-        busy={busy}
+        busy={busy || flashing}
         onCheck={() => void onCheck()}
       />
 
@@ -188,8 +269,18 @@ export default function FirmwareUpdatesSection() {
           notesUrl={state.notes_url ?? null}
           assetSize={state.asset_size}
           ready={kind === "ready"}
-          busy={busy}
+          busy={busy || flashing}
+          flashing={flashing}
           onDownload={() => state.latest && void runDownload(state.latest)}
+          onFlash={() => {
+            if (!state.latest) return;
+            setConfirm({
+              kind: "release",
+              version: state.latest,
+              installed: installedVersion,
+              downgrade: isDowngrade(installedVersion, state.latest),
+            });
+          }}
         />
       ) : null}
 
@@ -204,6 +295,14 @@ export default function FirmwareUpdatesSection() {
         </Card>
       ) : null}
 
+      {flashing ? (
+        <FlashingCard
+          version={state?.version ?? state?.latest ?? "—"}
+          hexPath={state?.hex_path ?? null}
+          startedAt={state?.started_at ?? null}
+        />
+      ) : null}
+
       {kind === "failed" ? (
         <Card aria-label="Firmware update error" static>
           <div className="flex items-start gap-3">
@@ -216,11 +315,34 @@ export default function FirmwareUpdatesSection() {
                 {state?.error ?? "Unknown error."}
               </p>
             </div>
-            <ActionButton tone="ghost" onClick={() => void onCheck()} disabled={busy}>
+            <ActionButton
+              tone="ghost"
+              onClick={() => void onCheck()}
+              disabled={busy || flashing}
+            >
               <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
               Try again
             </ActionButton>
           </div>
+        </Card>
+      ) : null}
+
+      {flashError ? (
+        <Card aria-label="Flash error" static>
+          <p
+            className="text-[12px] text-danger leading-relaxed"
+            role="alert"
+          >
+            {flashError}
+          </p>
+        </Card>
+      ) : null}
+
+      {flashOk && !flashing && kind !== "failed" ? (
+        <Card aria-label="Flash success" static>
+          <p className="text-[12px] text-foliage leading-relaxed" role="status">
+            {flashOk}
+          </p>
         </Card>
       ) : null}
 
@@ -234,17 +356,48 @@ export default function FirmwareUpdatesSection() {
         setSearch={setSearch}
         experimental={experimental}
         installedVersion={installedVersion}
-        busy={busy}
+        busy={busy || flashing}
+        flashing={flashing}
         onDownload={(v) => void runDownload(v)}
         downloadingVersion={
           kind === "downloading" ? state?.latest ?? null : null
         }
+        onFlash={(release) => {
+          setConfirm({
+            kind: "release",
+            version: release.version,
+            installed: installedVersion,
+            downgrade: isDowngrade(installedVersion, release.version),
+          });
+        }}
       />
 
-      <ManualFlashCard />
+      <ManualFlashCard
+        busy={flashing}
+        onFlash={(path) => {
+          setConfirm({
+            kind: "manual",
+            path,
+            installed: installedVersion,
+            downgrade: false,
+          });
+        }}
+      />
+
+      {confirm ? (
+        <ConfirmFlashModal
+          intent={confirm}
+          onCancel={() => setConfirm(null)}
+          onConfirm={() => void onConfirm()}
+        />
+      ) : null}
     </section>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Cards
+// ---------------------------------------------------------------------------
 
 function InstalledFirmwareCard({
   loaded,
@@ -334,7 +487,9 @@ function AvailableBanner({
   assetSize,
   ready,
   busy,
+  flashing,
   onDownload,
+  onFlash,
 }: {
   latest: string | undefined;
   channel: string | undefined;
@@ -342,23 +497,10 @@ function AvailableBanner({
   assetSize: number | undefined;
   ready: boolean;
   busy: boolean;
+  flashing: boolean;
   onDownload: () => void;
+  onFlash: () => void;
 }) {
-  const [flashing, setFlashing] = useState(false);
-  const [flashError, setFlashError] = useState<string | null>(null);
-
-  const onFlash = async () => {
-    if (!latest) return;
-    setFlashing(true);
-    setFlashError(null);
-    try {
-      const r = await flash(latest);
-      if (!r.ok) setFlashError(flashErrorCopy(r));
-    } finally {
-      setFlashing(false);
-    }
-  };
-
   return (
     <Card aria-label="Firmware update available" static>
       <div className="flex items-start gap-4 flex-wrap">
@@ -398,8 +540,8 @@ function AvailableBanner({
           ) : null}
           <ActionButton
             tone={ready ? "copper" : "ghost"}
-            onClick={() => void onFlash()}
-            disabled={flashing}
+            onClick={onFlash}
+            disabled={!ready || flashing || !latest}
             title={ready ? "Flash to device" : "Download first, then flash"}
           >
             <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -407,14 +549,73 @@ function AvailableBanner({
           </ActionButton>
         </div>
       </div>
-      {flashError ? (
-        <p className="mt-3 text-[12px] text-warn leading-relaxed" role="alert">
-          {flashError}
-        </p>
-      ) : null}
     </Card>
   );
 }
+
+function FlashingCard({
+  version,
+  hexPath,
+  startedAt,
+}: {
+  version: string;
+  hexPath: string | null;
+  startedAt: string | null;
+}) {
+  // Compute elapsed time client-side, ticking every second. The
+  // daemon emits an RFC3339 timestamp at flash start so we don't
+  // depend on host clock drift between renderer and daemon.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const elapsedSec = useMemo(() => {
+    if (!startedAt) return null;
+    const t = new Date(startedAt).getTime();
+    if (Number.isNaN(t)) return null;
+    return Math.max(0, Math.floor((now - t) / 1000));
+  }, [startedAt, now]);
+
+  return (
+    <Card aria-label="Firmware flash in progress" static>
+      <div className="flex items-center gap-3 flex-wrap">
+        <Loader2
+          size={18}
+          strokeWidth={1.75}
+          aria-hidden="true"
+          className="text-copper animate-spin shrink-0"
+        />
+        <div className="flex flex-col min-w-0 flex-1">
+          <span className="sc-chrome text-[10px] text-copper">
+            flashing — do not unplug
+          </span>
+          <span className="font-mono text-ink text-[14px] mt-1 break-all">
+            {version}
+          </span>
+          {hexPath ? (
+            <span
+              className="font-mono text-[10px] text-ink-dim mt-1 break-all"
+              title={hexPath}
+            >
+              {hexPath}
+            </span>
+          ) : null}
+        </div>
+        <span
+          className="sc-chrome text-[10px] text-ink-muted shrink-0 font-mono tabular-nums"
+          aria-live="polite"
+        >
+          {elapsedSec != null ? `${elapsedSec}s elapsed` : "starting…"}
+        </span>
+      </div>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Releases list
+// ---------------------------------------------------------------------------
 
 function ReleasesList({
   releases,
@@ -427,8 +628,10 @@ function ReleasesList({
   experimental,
   installedVersion,
   busy,
+  flashing,
   onDownload,
   downloadingVersion,
+  onFlash,
 }: {
   releases: FirmwareReleaseEntry[];
   visibleReleases: FirmwareReleaseEntry[];
@@ -440,8 +643,10 @@ function ReleasesList({
   experimental: boolean;
   installedVersion: string | null;
   busy: boolean;
+  flashing: boolean;
   onDownload: (version: string) => void;
   downloadingVersion: string | null;
+  onFlash: (release: FirmwareReleaseEntry) => void;
 }) {
   return (
     <Card aria-label="Firmware releases" static>
@@ -453,7 +658,6 @@ function ReleasesList({
           </span>
         </div>
 
-        {/* Filter bar */}
         <div className="flex items-center gap-2 flex-wrap">
           <ChannelChip
             current={channelFilter}
@@ -477,8 +681,8 @@ function ReleasesList({
           ) : null}
         </div>
 
-        {/* Search input */}
-        <label className="flex items-center gap-2 px-3 py-2 border border-hairline rounded-[6px] bg-substrate-2 focus-within:border-hairline-2 transition-colors"
+        <label
+          className="flex items-center gap-2 px-3 py-2 border border-hairline rounded-[6px] bg-substrate-2 focus-within:border-hairline-2 transition-colors"
           style={{ transitionDuration: "var(--sc-dur-quick)" }}
         >
           <Search
@@ -510,7 +714,6 @@ function ReleasesList({
           />
         </label>
 
-        {/* List */}
         {!releasesLoaded ? (
           <p className="text-[12px] text-ink-dim font-mono py-4">
             Loading releases…
@@ -532,8 +735,10 @@ function ReleasesList({
                 release={r}
                 installed={installedVersion === r.version}
                 busy={busy}
+                flashing={flashing}
                 downloading={downloadingVersion === r.version}
                 onDownload={() => onDownload(r.version)}
+                onFlash={() => onFlash(r)}
               />
             ))}
           </ul>
@@ -582,29 +787,19 @@ function ReleaseRow({
   release,
   installed,
   busy,
+  flashing,
   downloading,
   onDownload,
+  onFlash,
 }: {
   release: FirmwareReleaseEntry;
   installed: boolean;
   busy: boolean;
+  flashing: boolean;
   downloading: boolean;
   onDownload: () => void;
+  onFlash: () => void;
 }) {
-  const [flashing, setFlashing] = useState(false);
-  const [flashError, setFlashError] = useState<string | null>(null);
-
-  const onFlash = async () => {
-    setFlashing(true);
-    setFlashError(null);
-    try {
-      const r = await flash(release.version);
-      if (!r.ok) setFlashError(flashErrorCopy(r));
-    } finally {
-      setFlashing(false);
-    }
-  };
-
   return (
     <li
       className={`
@@ -614,7 +809,9 @@ function ReleaseRow({
         ${installed ? "bg-[color:var(--sc-foliage)]/[0.04]" : ""}
       `}
       style={
-        installed ? { boxShadow: "inset 2px 0 0 0 var(--sc-foliage)" } : undefined
+        installed
+          ? { boxShadow: "inset 2px 0 0 0 var(--sc-foliage)" }
+          : undefined
       }
     >
       <div className="flex items-center gap-3 flex-wrap">
@@ -670,52 +867,59 @@ function ReleaseRow({
           </ActionButton>
           <ActionButton
             tone="ghost"
-            onClick={() => void onFlash()}
+            onClick={onFlash}
             disabled={flashing}
             aria-label={`Flash ${release.version}`}
-            title="Flash integration ships in SC-13"
+            title={
+              flashing
+                ? "Another flash is in progress"
+                : "Download then confirm — flash writes this firmware to the device"
+            }
           >
             <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
             Flash
           </ActionButton>
         </div>
       </div>
-      {flashError ? (
-        <p className="text-[11px] text-warn leading-relaxed" role="alert">
-          {flashError}
-        </p>
-      ) : null}
     </li>
   );
 }
 
-function ManualFlashCard() {
+// ---------------------------------------------------------------------------
+// Manual flash card
+// ---------------------------------------------------------------------------
+
+function ManualFlashCard({
+  busy,
+  onFlash,
+}: {
+  busy: boolean;
+  onFlash: (absolutePath: string) => void;
+}) {
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  // Lazy initializer so SSR sees `true` (avoiding hydration mismatch
+  // would also work, but we never SSR the Electron renderer) and the
+  // client first paint reads the real bridge presence. Browser dev
+  // mode lands as `false` → the Browse button disables with a tooltip.
+  const [bridgeAvailable] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    const w = window as unknown as { streamcheats?: { pickHexFile?: unknown } };
+    return typeof w.streamcheats?.pickHexFile === "function";
+  });
 
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!path.trim()) return;
-    setBusy(true);
+  const onBrowse = async () => {
     setError(null);
-    try {
-      const r = await flashLocal(path.trim());
-      if (!r.ok) setError(flashErrorCopy(r));
-    } finally {
-      setBusy(false);
-    }
+    const picked = await pickHexFile();
+    if (picked) setPath(picked);
   };
 
-  const onPick = (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    // Browsers don't expose a real filesystem path for security
-    // reasons, so we surface the filename here; SC-13 will replace
-    // this control with an Electron-native picker that hands the
-    // daemon an absolute path. For now we accept a typed-in path
-    // alongside the picker so dev mode is usable.
-    setPath(f.name);
+  const onSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const trimmed = path.trim();
+    if (!trimmed) return;
+    setError(null);
+    onFlash(trimmed);
   };
 
   return (
@@ -750,24 +954,31 @@ function ManualFlashCard() {
                 placeholder:text-ink-dim
               "
             />
-            <label className="cursor-pointer sc-chrome text-[10px] text-ink-muted hover:text-ink transition-colors"
+            <button
+              type="button"
+              onClick={() => void onBrowse()}
+              disabled={!bridgeAvailable}
+              title={
+                bridgeAvailable
+                  ? "Open OS file picker"
+                  : "Native picker only available inside the StreamCheats app"
+              }
+              className="
+                cursor-pointer sc-chrome text-[10px] text-ink-muted
+                hover:text-ink transition-colors
+                disabled:opacity-50 disabled:cursor-not-allowed
+              "
               style={{ transitionDuration: "var(--sc-dur-quick)" }}
             >
               Browse
-              <input
-                type="file"
-                accept=".hex"
-                onChange={onPick}
-                className="sr-only"
-              />
-            </label>
+            </button>
           </label>
           <div className="flex justify-end">
             <ActionButton
               tone="ghost"
               type="submit"
               disabled={busy || !path.trim()}
-              title="Flash integration ships in SC-13"
+              title="Flash file"
             >
               <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
               Flash file
@@ -782,5 +993,154 @@ function ManualFlashCard() {
         ) : null}
       </div>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Confirm modal
+// ---------------------------------------------------------------------------
+
+type FlashConfirmIntent =
+  | {
+      kind: "release";
+      version: string;
+      installed: string | null;
+      downgrade: boolean;
+    }
+  | {
+      kind: "manual";
+      path: string;
+      installed: string | null;
+      downgrade: boolean;
+    };
+
+function ConfirmFlashModal({
+  intent,
+  onCancel,
+  onConfirm,
+}: {
+  intent: FlashConfirmIntent;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  // Close on ESC. Accessibility nicety — modal traps elsewhere are
+  // overkill for a confirmation overlay in our two-button case.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  const isManual = intent.kind === "manual";
+  const target =
+    intent.kind === "release" ? intent.version : `local file`;
+  const warnTone =
+    isManual || intent.downgrade
+      ? "text-copper"
+      : "text-ink-muted";
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Confirm firmware flash"
+      className="
+        fixed inset-0 z-50
+        flex items-center justify-center
+        bg-black/60 backdrop-blur-sm
+        px-5
+      "
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
+    >
+      <div
+        className="
+          w-full max-w-[420px]
+          bg-panel-2 border border-hairline-2 rounded-[10px]
+          p-5 flex flex-col gap-4
+          shadow-xl
+        "
+      >
+        <div className="flex items-start gap-3">
+          <AlertTriangle
+            size={20}
+            strokeWidth={1.75}
+            aria-hidden="true"
+            className={`shrink-0 ${warnTone}`}
+          />
+          <div className="flex flex-col gap-1 min-w-0 flex-1">
+            <span className="sc-chrome text-[10px] text-copper">
+              confirm firmware flash
+            </span>
+            <h2 className="text-ink text-[15px] font-medium">
+              Flash {target}?
+            </h2>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 text-[12px] text-ink-muted leading-relaxed">
+          {intent.kind === "release" ? (
+            <p>
+              About to write{" "}
+              <span className="font-mono text-ink">{intent.version}</span>{" "}
+              to your StreamCheats device.{" "}
+              {intent.installed ? (
+                <>
+                  Current:{" "}
+                  <span className="font-mono text-ink">{intent.installed}</span>
+                  .
+                </>
+              ) : (
+                <>No installed version detected (no heartbeat yet).</>
+              )}
+            </p>
+          ) : (
+            <p>
+              About to flash a local{" "}
+              <span className="font-mono text-ink">.hex</span> file. This is
+              not from the StreamCheats release stream — downgrades and
+              modified firmware are not validated and can leave your device
+              in an unusable state.
+            </p>
+          )}
+
+          {intent.kind === "release" && intent.downgrade ? (
+            <p className="text-copper">
+              This is a <strong>downgrade</strong>. Older firmware may
+              behave differently — proceed only if you know why.
+            </p>
+          ) : null}
+
+          {intent.kind === "manual" && intent.installed ? (
+            <p>
+              File:{" "}
+              <span className="font-mono text-ink break-all">
+                {intent.path}
+              </span>
+            </p>
+          ) : intent.kind === "manual" ? (
+            <p className="font-mono text-ink break-all">{intent.path}</p>
+          ) : null}
+
+          <p>
+            Your device will be unresponsive for ~30 seconds.{" "}
+            <strong>Do not unplug.</strong>
+          </p>
+        </div>
+
+        <div className="flex items-center justify-end gap-2">
+          <ActionButton tone="ghost" onClick={onCancel}>
+            Cancel
+          </ActionButton>
+          <ActionButton tone="copper" onClick={onConfirm}>
+            <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
+            I understand, flash
+          </ActionButton>
+        </div>
+      </div>
+    </div>
   );
 }

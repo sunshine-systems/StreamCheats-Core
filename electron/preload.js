@@ -44,4 +44,19 @@ contextBridge.exposeInMainWorld('streamcheats', {
    * Never throws.
    */
   getBackendUrl: () => ipcRenderer.invoke('backend-url:get'),
+
+  /**
+   * Open the OS-native file picker constrained to `.hex` files and
+   * return the absolute path the user chose (or `null` if they
+   * cancelled). Backs the SC-13 manual-flash card on the Updates
+   * page — the daemon's `/api/firmware/flash_local` route needs an
+   * absolute path, and browsers don't expose the real filesystem
+   * path on `<input type=file>` for sandbox reasons.
+   *
+   * Resolves to:
+   *   { ok: true, path: 'C:\\absolute\\path\\to\\firmware.hex' }
+   *   { ok: false, reason: 'cancelled' | 'unavailable' }
+   * Never throws.
+   */
+  pickHexFile: () => ipcRenderer.invoke('pick-hex-file:run'),
 });
