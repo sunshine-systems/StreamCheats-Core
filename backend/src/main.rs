@@ -92,6 +92,7 @@
 //! [`HEARTBEAT_INTERVAL`]: crate::streamcheats::heartbeat::HEARTBEAT_INTERVAL
 //! [`SerialTxHolder`]: crate::util::translator::SerialTxHolder
 
+mod firmware;
 mod http;
 mod kmbox_net;
 mod services;
@@ -433,6 +434,7 @@ fn supervisor_loop(
     running: Arc<AtomicBool>,
     lines_received: Arc<AtomicU64>,
     enable_timing: bool,
+    last_heartbeat: crate::firmware::device::LastHeartbeat,
 ) {
     info!("Scanning available COM ports for firmware...");
     while running.load(Ordering::SeqCst) {
@@ -485,12 +487,14 @@ fn supervisor_loop(
                 let reader_session_running = session_running.clone();
                 let reader_lines = lines_received.clone();
                 let reader_port_name = port_name.clone();
+                let reader_heartbeat = last_heartbeat.clone();
                 let reader_thread = thread::spawn(move || {
                     crate::streamcheats::reader::serial_reader_loop(
                         &reader_port,
                         &reader_port_name,
                         reader_session_running,
                         reader_lines,
+                        reader_heartbeat,
                     );
                 });
 
@@ -671,12 +675,15 @@ fn run(
     let supervisor_running = running.clone();
     let supervisor_holder = serial_tx_holder.clone();
     let supervisor_lines = lines_received.clone();
+    let last_heartbeat = crate::firmware::device::LastHeartbeat::new();
+    let supervisor_heartbeat = last_heartbeat.clone();
     let supervisor_thread = thread::spawn(move || {
         supervisor_loop(
             supervisor_holder,
             supervisor_running,
             supervisor_lines,
             settings.enable_timing_logs,
+            supervisor_heartbeat,
         );
     });
 
@@ -741,6 +748,14 @@ fn run(
     // exposes status to the UI via `/api/updates/*`. The Arc lives in
     // AppState; the poller task is spawned inside the HTTP runtime.
     let updater_handle = Arc::new(crate::updater::Updater::new(settings.experimental_builds));
+    // Firmware updater (SC-10). Shares `LastHeartbeat` with the serial
+    // reader so installed-version state comes from one source of truth.
+    let firmware_handle = Arc::new(crate::firmware::FirmwareUpdater::new(
+        settings.firmware.repo.clone(),
+        settings.firmware.auto_check,
+        settings.experimental_builds,
+        last_heartbeat.clone(),
+    ));
     let http_state_template = http::state::AppState {
         device: device.clone(),
         peer_registry: monitor_registry.clone(),
@@ -755,6 +770,7 @@ fn run(
         started_at,
         log_stream: Some(log_stream_handles),
         updater: updater_handle.clone(),
+        firmware: firmware_handle.clone(),
         running: running.clone(),
     };
     let http_handle = http::spawn_http_server(http_state_template, running.clone());
@@ -835,8 +851,7 @@ mod tests {
     /// request up or down.
     #[test]
     fn udp_recv_buffer_can_be_bumped_above_default() {
-        let socket =
-            UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral UDP socket on loopback");
+        let socket = UdpSocket::bind("127.0.0.1:0").expect("bind ephemeral UDP socket on loopback");
         let sock_ref = socket2::SockRef::from(&socket);
         let desired = 256 * 1024;
         sock_ref
