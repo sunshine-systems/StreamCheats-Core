@@ -2,10 +2,11 @@
 
 // Home — the landing page mounted at `/` inside the AppShell.
 //
-// Composed of three sections per SC-7 (revised after first-user review):
+// Composed of four sections per SC-7 (revised after first-user review):
 //   1. Software update banner (only when an update is pending)
 //   2. Connected Devices section (Mouse + Keyboard cards)
 //   3. Unseen warnings / errors card (soft 0-state)
+//   4. Bug report card (generate a diagnostic bundle)
 //
 // Stripped header (v2): no H1 / lede paragraph — the eyebrow + version
 // chip alone do the job. Three real cards below carry the content.
@@ -19,6 +20,7 @@ import Eyebrow from "../components/ui/Eyebrow";
 import DevicesSection from "../components/home/DevicesSection";
 import UpdatePendingBanner from "../components/home/UpdatePendingBanner";
 import UnseenLogCard from "../components/home/UnseenLogCard";
+import BugReportCard from "../components/home/BugReportCard";
 import { useHealthDetail } from "../lib/hooks/useHealthDetail";
 import pkg from "../package.json";
 
@@ -41,6 +43,7 @@ export default function HomePage() {
       <UpdatePendingBanner />
       <DevicesSection />
       <UnseenLogCard />
+      <BugReportCard />
     </div>
   );
 }
