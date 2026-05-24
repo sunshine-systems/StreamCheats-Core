@@ -197,6 +197,12 @@ export default function UpdatesPage() {
           onClose={() => setModalOpen(false)}
           onRetry={onRetry}
           onConfirm={onFlashConfirm}
+          // Pass onDownload so the modal can chain
+          // download → flash if the user opens it from this page on a
+          // not-yet-Ready release. Today the Update Center only opens
+          // the modal from the `ready` row but threading this keeps
+          // the two entry points behaviourally identical.
+          onDownload={(v) => fw.runDownload(v)}
           onCancel={onFlashCancel}
         />
       ) : null}

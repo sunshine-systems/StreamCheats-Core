@@ -22,7 +22,7 @@ import {
   useState,
   type ChangeEvent,
 } from "react";
-import { Download, RotateCcw, Search, Upload, Zap } from "lucide-react";
+import { RotateCcw, Search, Upload, Zap } from "lucide-react";
 
 import PageHeader from "../../../components/ui/PageHeader";
 import Card from "../../../components/ui/Card";
@@ -135,6 +135,13 @@ export default function InstallFirmwarePage() {
   const board = status?.board ?? null;
   const chip = chipForKind(kind);
   const flashing = kind === "flashing";
+  // Heartbeat-derived: until the daemon parses an installed version
+  // from a device heartbeat, the firmware-update state is moot.
+  // Mirror the gating used by the Update Center page so the user sees
+  // a coherent story across both views. The releases list + manual
+  // .hex picker still render unconditionally — browsing + flashing
+  // historical firmware is the whole point of this page, device or no.
+  const deviceSeen = installedVersion != null;
 
   const backHref = useRelativeHref("/updates");
 
@@ -199,67 +206,77 @@ export default function InstallFirmwarePage() {
         }
       />
 
-      <section
-        aria-label="Installed firmware"
-        className="flex flex-col gap-3"
-      >
-        <header className="flex items-center justify-between gap-3 flex-wrap">
-          <Eyebrow>device</Eyebrow>
-          <StateChip tone={chip.tone}>{chip.label}</StateChip>
-        </header>
-        <Card aria-label="Installed firmware" static>
-          <div className="flex items-start gap-4 flex-wrap">
-            <div className="flex flex-col min-w-0 flex-1">
-              <span className="sc-chrome text-[10px] text-ink-dim">
-                installed
-              </span>
-              <span className="font-mono text-ink text-[18px] leading-tight mt-1 break-all">
-                {installedVersion ?? "—"}
-              </span>
-              <span className="sc-chrome text-[10px] text-ink-dim mt-2">
-                {board ? `board · ${board}` : "board · —"}
-                {installedChannel !== "unknown"
-                  ? ` · channel · ${installedChannel}`
-                  : null}
-              </span>
-            </div>
-            <ActionButton
-              tone="ghost"
-              onClick={() => void onCheck()}
-              disabled={busy || flashing}
-            >
-              <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
-              Check now
-            </ActionButton>
-          </div>
-
-          {kind === "downloading" ? (
-            <div className="mt-4">
-              <ProgressBar
-                percent={state?.percent ?? null}
-                bytesSoFar={state?.bytes_so_far}
-                totalBytes={state?.total_bytes ?? null}
-                label={`Downloading ${state?.latest ?? ""}`}
-              />
-            </div>
-          ) : null}
-
-          {flashing ? (
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <span className="sc-chrome text-[10px] text-copper">
-                flashing · {state?.version ?? state?.latest ?? "—"}
-              </span>
+      {deviceSeen ? (
+        <section
+          aria-label="Installed firmware"
+          className="flex flex-col gap-3"
+        >
+          <header className="flex items-center justify-between gap-3 flex-wrap">
+            <Eyebrow>device</Eyebrow>
+            <StateChip tone={chip.tone}>{chip.label}</StateChip>
+          </header>
+          <Card aria-label="Installed firmware" static>
+            <div className="flex items-start gap-4 flex-wrap">
+              <div className="flex flex-col min-w-0 flex-1">
+                <span className="sc-chrome text-[10px] text-ink-dim">
+                  installed
+                </span>
+                <span className="font-mono text-ink text-[18px] leading-tight mt-1 break-all">
+                  {installedVersion ?? "—"}
+                </span>
+                <span className="sc-chrome text-[10px] text-ink-dim mt-2">
+                  {board ? `board · ${board}` : "board · —"}
+                  {installedChannel !== "unknown"
+                    ? ` · channel · ${installedChannel}`
+                    : null}
+                </span>
+              </div>
               <ActionButton
-                tone="copper"
-                onClick={() => setModalOpen(true)}
+                tone="ghost"
+                onClick={() => void onCheck()}
+                disabled={busy || flashing}
               >
-                <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-                View progress
+                <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
+                Check now
               </ActionButton>
             </div>
-          ) : null}
-        </Card>
-      </section>
+
+            {kind === "downloading" ? (
+              <div className="mt-4">
+                <ProgressBar
+                  percent={state?.percent ?? null}
+                  bytesSoFar={state?.bytes_so_far}
+                  totalBytes={state?.total_bytes ?? null}
+                  label={`Downloading ${state?.latest ?? ""}`}
+                />
+              </div>
+            ) : null}
+
+            {flashing ? (
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <span className="sc-chrome text-[10px] text-copper">
+                  flashing · {state?.version ?? state?.latest ?? "—"}
+                </span>
+                <ActionButton
+                  tone="copper"
+                  onClick={() => setModalOpen(true)}
+                >
+                  <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
+                  View progress
+                </ActionButton>
+              </div>
+            ) : null}
+          </Card>
+        </section>
+      ) : (
+        // Muted note — keeps the visual rhythm of the page consistent
+        // when no device has been seen, without surfacing "update
+        // available" or an installed-version of "—" that would imply
+        // we know something we don't.
+        <p className="sc-chrome text-[10px] text-ink-dim">
+          Connect your StreamCheats device to see installed firmware.
+        </p>
+      )}
 
       <ReleasesList
         releases={releases}
@@ -271,12 +288,7 @@ export default function InstallFirmwarePage() {
         setSearch={setSearch}
         experimental={experimental}
         installedVersion={installedVersion}
-        busy={busy || flashing}
         flashing={flashing}
-        onDownload={(v) => void runDownload(v)}
-        downloadingVersion={
-          kind === "downloading" ? state?.latest ?? null : null
-        }
         onFlash={(release) => {
           setIntent({
             kind: "release",
@@ -309,6 +321,7 @@ export default function InstallFirmwarePage() {
           onClose={() => setModalOpen(false)}
           onRetry={() => setModalOpen(true)}
           onConfirm={onConfirm}
+          onDownload={(v) => runDownload(v)}
           onCancel={onCancelFlash}
         />
       ) : null}
@@ -330,10 +343,7 @@ function ReleasesList({
   setSearch,
   experimental,
   installedVersion,
-  busy,
   flashing,
-  onDownload,
-  downloadingVersion,
   onFlash,
 }: {
   releases: FirmwareReleaseEntry[];
@@ -345,10 +355,7 @@ function ReleasesList({
   setSearch: (s: string) => void;
   experimental: boolean;
   installedVersion: string | null;
-  busy: boolean;
   flashing: boolean;
-  onDownload: (version: string) => void;
-  downloadingVersion: string | null;
   onFlash: (release: FirmwareReleaseEntry) => void;
 }) {
   return (
@@ -437,10 +444,7 @@ function ReleasesList({
                 key={`${r.version}-${r.asset_name}`}
                 release={r}
                 installed={installedVersion === r.version}
-                busy={busy}
                 flashing={flashing}
-                downloading={downloadingVersion === r.version}
-                onDownload={() => onDownload(r.version)}
                 onFlash={() => onFlash(r)}
               />
             ))}
@@ -489,18 +493,12 @@ function ChannelChip({
 function ReleaseRow({
   release,
   installed,
-  busy,
   flashing,
-  downloading,
-  onDownload,
   onFlash,
 }: {
   release: FirmwareReleaseEntry;
   installed: boolean;
-  busy: boolean;
   flashing: boolean;
-  downloading: boolean;
-  onDownload: () => void;
   onFlash: () => void;
 }) {
   return (
@@ -559,15 +557,13 @@ function ReleaseRow({
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          <ActionButton
-            tone="ghost"
-            onClick={onDownload}
-            disabled={busy || downloading}
-            aria-label={`Download ${release.version}`}
-          >
-            <Download size={12} strokeWidth={1.75} aria-hidden="true" />
-            {downloading ? "Downloading…" : "Download"}
-          </ActionButton>
+          {/*
+            Single Flash button — the stepper modal chains
+            download → flash automatically when the daemon doesn't
+            already have a Ready hex for this version. Splitting
+            those into two buttons forced the user to think about
+            cache state that's purely the daemon's concern.
+          */}
           <ActionButton
             tone="ghost"
             onClick={onFlash}
@@ -576,7 +572,7 @@ function ReleaseRow({
             title={
               flashing
                 ? "Another flash is in progress"
-                : "Confirm in the next step — flash writes this firmware to the device"
+                : "Confirm in the next step — flash downloads (if needed) and writes this firmware to the device"
             }
           >
             <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
