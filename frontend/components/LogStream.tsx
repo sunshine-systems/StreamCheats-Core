@@ -22,6 +22,15 @@ import {
   useState,
   type CSSProperties,
 } from "react";
+import {
+  ArrowDownToLine,
+  Database,
+  Eye,
+  Gauge,
+  Pause,
+  Play,
+  Trash2,
+} from "lucide-react";
 
 import {
   useLogStream,
@@ -113,7 +122,8 @@ export default function LogStream() {
         ref={scrollerRef}
         onScroll={onViewportScroll}
         className="
-          flex-1 min-h-0 overflow-auto
+          flex-1 min-h-0
+          overflow-x-auto overflow-y-auto
           bg-substrate-2 border border-hairline rounded-[8px]
           px-4 py-3
           font-mono text-[12.5px]
@@ -137,9 +147,12 @@ function Row({ event }: { event: LogEvent }) {
   // HH:MM:SS.mmm slice from the ISO timestamp — full ISO is too noisy.
   const ts = event.ts.length >= 23 ? event.ts.substring(11, 23) : event.ts;
   return (
+    // Single-line rows — long messages extend the row's intrinsic width
+    // so the viewport scrolls horizontally instead of breaking the
+    // log's structure across multiple visual lines.
     <div
       className="flex gap-2"
-      style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}
+      style={{ whiteSpace: "nowrap" }}
     >
       <span className="text-ink-dim shrink-0">{ts}</span>
       <span
@@ -148,7 +161,7 @@ function Row({ event }: { event: LogEvent }) {
       >
         {event.level.toUpperCase()}
       </span>
-      <span className="flex-1 min-w-0">
+      <span className="shrink-0">
         {prefix && (
           <span className="text-foliage sc-chrome text-[11px] mr-1">
             {prefix}
@@ -199,50 +212,137 @@ function StatusRow({
   onAutoscrollToggle: () => void;
 }) {
   const s = statusVisual(status);
+  // Compact, single-line row. At 730px CSS the previous layout wrapped
+  // because the labeled "rate / buffer / visible / autoscroll" stack
+  // overflowed; we now drop the labels in favour of icons + tabular
+  // numerics and collapse the toggles to icon-only with tooltips.
   return (
     <div
       className="
-        flex flex-wrap items-center gap-x-4 gap-y-2
+        flex flex-nowrap items-center gap-x-3
         px-3 py-2 rounded-[8px]
         bg-panel border border-hairline
         sc-chrome text-[10.5px]
+        min-w-0
       "
     >
-      <span className="inline-flex items-center gap-2" style={{ color: s.color }}>
+      <span
+        className="inline-flex items-center gap-1.5 shrink-0"
+        style={{ color: s.color }}
+        title={s.label}
+        aria-label={`Stream status: ${s.label}`}
+      >
         <span aria-hidden="true">{s.glyph}</span>
-        <span>{s.label}</span>
       </span>
       <Sep />
-      <Metric label="rate" value={`${eventsPerSec}/s`} />
+      <CompactMetric
+        Icon={Gauge}
+        value={`${eventsPerSec}/s`}
+        title={`Events per second: ${eventsPerSec}/s`}
+      />
       <Sep />
-      <Metric label="buffer" value={fmtNum(bufferCount)} />
+      <CompactMetric
+        Icon={Database}
+        value={fmtNum(bufferCount)}
+        title={`Buffered events: ${fmtNum(bufferCount)}`}
+      />
       <Sep />
-      <Metric label="visible" value={fmtNum(visibleCount)} />
+      <CompactMetric
+        Icon={Eye}
+        value={fmtNum(visibleCount)}
+        title={`Visible events after filtering: ${fmtNum(visibleCount)}`}
+      />
       {lagCount > 0 && (
         <>
           <Sep />
-          <Metric
-            label="lagged"
-            value={`${fmtNum(lagCount)} dropped`}
+          <CompactMetric
+            Icon={Database}
+            value={fmtNum(lagCount)}
+            title={`Dropped events (lagged): ${fmtNum(lagCount)}`}
             color="var(--sc-copper)"
           />
         </>
       )}
-      <div className="ml-auto flex items-center gap-2">
-        <ToggleChip
+      <div className="ml-auto flex items-center gap-1.5 shrink-0">
+        <IconToggle
           on={!paused}
           onClick={onPauseToggle}
-          label={paused ? "paused" : "live"}
-          title={paused ? "Resume appending events" : "Pause the stream"}
+          Icon={paused ? Play : Pause}
+          label={paused ? "Resume stream" : "Pause stream"}
         />
-        <ToggleChip
+        <IconToggle
           on={autoscroll}
           onClick={onAutoscrollToggle}
-          label={autoscroll ? "autoscroll" : "scroll free"}
-          title="Toggle stick-to-bottom"
+          Icon={ArrowDownToLine}
+          label={autoscroll ? "Disable autoscroll" : "Enable autoscroll"}
         />
       </div>
     </div>
+  );
+}
+
+function CompactMetric({
+  Icon,
+  value,
+  title,
+  color,
+}: {
+  Icon: typeof Gauge;
+  value: string;
+  title: string;
+  color?: string;
+}) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 shrink-0"
+      title={title}
+      aria-label={title}
+      style={{ color: color ?? "var(--sc-ink)" }}
+    >
+      <Icon
+        size={11}
+        strokeWidth={1.75}
+        aria-hidden="true"
+        style={{ color: "var(--sc-ink-dim)" }}
+      />
+      <span style={{ fontVariantNumeric: "tabular-nums" }}>{value}</span>
+    </span>
+  );
+}
+
+function IconToggle({
+  on,
+  onClick,
+  Icon,
+  label,
+}: {
+  on: boolean;
+  onClick: () => void;
+  Icon: typeof Pause;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      aria-label={label}
+      title={label}
+      className="
+        inline-flex items-center justify-center
+        h-6 w-6 rounded-[4px]
+        border bg-substrate-2
+        transition-colors
+      "
+      style={{
+        color: on ? "var(--sc-foliage)" : "var(--sc-ink-dim)",
+        borderColor: on ? "var(--sc-hairline-2)" : "var(--sc-hairline)",
+        transitionDuration: "var(--sc-dur-quick)",
+        transitionTimingFunction: "var(--sc-ease-out)",
+      }}
+    >
+      <Icon size={12} strokeWidth={1.75} aria-hidden="true" />
+    </button>
   );
 }
 
@@ -262,23 +362,6 @@ function statusVisual(status: LogStreamStatus): {
     default:
       return { glyph: "…", label: "connecting", color: "var(--sc-ink-dim)" };
   }
-}
-
-function Metric({
-  label,
-  value,
-  color,
-}: {
-  label: string;
-  value: string;
-  color?: string;
-}) {
-  return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="text-ink-dim">{label}</span>
-      <span style={{ color: color ?? "var(--sc-ink)" }}>{value}</span>
-    </span>
-  );
 }
 
 function Sep() {
@@ -345,10 +428,11 @@ function FilterBar({
       <button
         type="button"
         onClick={onClear}
+        aria-label="Clear log buffer"
         title="Clear the UI buffer (daemon ring is unaffected)"
         className="
-          sc-chrome text-[10.5px] text-ink-dim
-          px-2.5 py-1.5 rounded-[6px]
+          inline-flex items-center justify-center shrink-0
+          h-7 w-7 rounded-[6px] text-ink-dim
           border border-hairline bg-substrate-2
           hover:text-ink-muted hover:border-hairline-2
           transition-colors
@@ -358,7 +442,7 @@ function FilterBar({
           transitionTimingFunction: "var(--sc-ease-out)",
         }}
       >
-        clear
+        <Trash2 size={12} strokeWidth={1.75} aria-hidden="true" />
       </button>
     </div>
   );
@@ -404,37 +488,3 @@ function LevelChip({
   );
 }
 
-function ToggleChip({
-  on,
-  onClick,
-  label,
-  title,
-}: {
-  on: boolean;
-  onClick: () => void;
-  label: string;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      aria-pressed={on}
-      className="
-        sc-chrome text-[10px]
-        px-2 py-1 rounded-[4px]
-        border bg-substrate-2
-        transition-colors
-      "
-      style={{
-        color: on ? "var(--sc-foliage)" : "var(--sc-ink-dim)",
-        borderColor: on ? "var(--sc-hairline-2)" : "var(--sc-hairline)",
-        transitionDuration: "var(--sc-dur-quick)",
-        transitionTimingFunction: "var(--sc-ease-out)",
-      }}
-    >
-      {label}
-    </button>
-  );
-}

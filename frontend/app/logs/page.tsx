@@ -16,7 +16,7 @@ export default function LogsPage() {
       className="
         px-5 sm:px-8 py-8
         flex flex-col gap-6
-        min-h-screen
+        h-full min-h-0
       "
     >
       <PageHeader eyebrow="system · logs" title="Logs" />

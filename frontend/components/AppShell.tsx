@@ -71,11 +71,16 @@ export default function AppShell({ children }: AppShellProps) {
   const experimentalActive = useExperimentalActive();
 
   return (
-    <div className="sc-grain min-h-screen flex">
+    // h-dvh + per-pane scrolling so the sidebar stays pinned while the
+    // content area scrolls independently. (Previously this was
+    // `min-h-screen` which let the whole window — sidebar included —
+    // scroll with long content like the live log viewer.)
+    <div className="sc-grain h-dvh flex overflow-hidden">
       <aside
         aria-label="Primary"
         className="
           w-[52px] shrink-0
+          h-dvh
           flex flex-col items-stretch
           bg-substrate-2
           border-r border-hairline
@@ -114,7 +119,7 @@ export default function AppShell({ children }: AppShellProps) {
         </nav>
       </aside>
 
-      <main className="flex-1 min-w-0 relative">
+      <main className="flex-1 min-w-0 relative h-dvh overflow-y-auto">
         {children}
       </main>
     </div>
