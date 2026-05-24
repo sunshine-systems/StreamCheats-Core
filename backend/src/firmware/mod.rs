@@ -27,7 +27,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{mpsc, Mutex, Notify};
 use tracing::{info, warn};
 
 use self::device::{InstalledFirmware, LastHeartbeat};
@@ -84,8 +84,11 @@ pub enum State {
         sha256: String,
     },
     /// Flash in flight. `teensy_loader_cli` doesn't expose a structured
-    /// progress signal, so we surface elapsed time + the asset version
-    /// rather than a percent. The UI shows an indeterminate spinner.
+    /// progress signal, but it DOES emit characteristic stdout lines we
+    /// pattern-match into a coarse phase enum so the UI stepper modal
+    /// can render the right step. We also mirror the last ~20 stdout
+    /// lines into `log_tail` so the modal can show recent loader output
+    /// inline.
     Flashing {
         /// Display version we asked the loader to write (e.g.
         /// `"rel-5.17"` or `"manual"` for `/flash_local`).
@@ -97,9 +100,37 @@ pub enum State {
         /// RFC3339 timestamp the flash started, so the UI can render
         /// `Math.floor((now - started_at) / 1000)` for elapsed time.
         started_at: String,
+        /// Coarse phase the loader is currently in — driven off
+        /// pattern-matched stdout lines. Starts in `Starting` before
+        /// the first line lands.
+        phase: FlashPhase,
+        /// Last ~20 lines of stdout/stderr from the loader. Capped at
+        /// [`flash::LOG_TAIL_CAP`] to keep status responses small.
+        log_tail: Vec<String>,
     },
     /// Last check, download, or flash failed.
     Failed { error: String, when: String },
+}
+
+/// Coarse phase tracker for a flash in flight. Driven off the
+/// characteristic stdout lines `teensy_loader_cli` emits — see
+/// [`flash::run_flash`] for the pattern-match rules. The UI stepper
+/// modal maps each phase to a step screen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashPhase {
+    /// Subprocess spawned, no output yet. Initial.
+    Starting,
+    /// Saw "Waiting for Teensy device" — user needs to press the
+    /// reset/program button. The wait-for-device timeout is armed
+    /// while we're in this phase.
+    WaitingForDevice,
+    /// Saw "Found HalfKay Bootloader" — flashing in progress. No
+    /// cancel UI in this phase: yanking power mid-write would brick
+    /// the device.
+    Programming,
+    /// Saw "Booting" — device is restarting. Almost done.
+    Booting,
 }
 
 impl Default for State {
@@ -166,6 +197,13 @@ pub struct FirmwareUpdater {
     /// doesn't run on every flash. Cleared on resolve failure so the
     /// next attempt re-probes from scratch.
     pub loader_path: Arc<Mutex<Option<PathBuf>>>,
+    /// Fired by `POST /api/firmware/cancel_flash`. The active flash's
+    /// supervision loop in [`flash::run_flash`] notices and kills the
+    /// subprocess. Stored as `Mutex<Arc<Notify>>` (not a plain
+    /// `Arc<Notify>`) so `start_flash` can swap in a fresh `Notify`
+    /// per flash — a stored permit from a never-delivered cancel on
+    /// a previous flash can't carry over and kill a fresh one.
+    pub flash_cancel: Arc<Mutex<Arc<Notify>>>,
 }
 
 impl FirmwareUpdater {
@@ -205,7 +243,22 @@ impl FirmwareUpdater {
             loader_url: Arc::new(Mutex::new(loader_url)),
             loader_sha256: Arc::new(Mutex::new(loader_sha256)),
             loader_path: Arc::new(Mutex::new(None)),
+            flash_cancel: Arc::new(Mutex::new(Arc::new(Notify::new()))),
         }
+    }
+
+    /// Request cancellation of the in-flight flash. Returns `true` if
+    /// a flash was actually running, `false` if there was nothing to
+    /// cancel. Route layer surfaces `false` as 409 so the UI doesn't
+    /// silently no-op a button press. The supervision loop in
+    /// [`flash::run_flash`] handles the actual kill + state transition.
+    pub async fn cancel_flash(&self) -> bool {
+        if !self.flash_in_progress.load(Ordering::SeqCst) {
+            return false;
+        }
+        let notify = self.flash_cancel.lock().await.clone();
+        notify.notify_one();
+        true
     }
 
     /// Cheap sync check used by `GET /api/firmware/status` — does the
@@ -549,14 +602,32 @@ impl FirmwareUpdater {
             version: version.clone(),
             hex_path: hex_path.to_string_lossy().to_string(),
             started_at,
+            phase: FlashPhase::Starting,
+            log_tail: Vec::new(),
         })
         .await;
+
+        // Swap in a fresh Notify for this flash so any stale permit
+        // from a previous cancel-after-exit race can't kill the new
+        // flash. The cancel_flash route reads from the same Mutex
+        // wrapper, so subsequent cancels still find the live Notify.
+        let cancel_for_task = {
+            let fresh = Arc::new(Notify::new());
+            let mut g = self.flash_cancel.lock().await;
+            *g = fresh.clone();
+            fresh
+        };
 
         let me = self.clone();
         let version_for_task = version.clone();
         let hex_for_task = hex_path.clone();
+        let state_for_task = self.state.clone();
         tokio::spawn(async move {
-            let outcome = flash::run_flash(&loader_path, mcu, &hex_for_task).await;
+            let control = flash::FlashControl {
+                state: state_for_task,
+                cancel: cancel_for_task,
+            };
+            let outcome = flash::run_flash(&loader_path, mcu, &hex_for_task, control).await;
             // Clear the single-flight + heartbeat-suspension flag
             // BEFORE the state transition so anything reading
             // `installed_version` immediately afterwards sees the
@@ -569,16 +640,25 @@ impl FirmwareUpdater {
                         version_for_task,
                         hex_for_task.display()
                     );
-                    // We don't know whether the device has actually
-                    // rebooted into the new firmware yet — the next
-                    // heartbeat will refresh `installed`. Transition
-                    // to `UpToDate` with the version we just wrote so
-                    // the UI immediately reflects success; the
-                    // background poller will reconcile on its next
-                    // check if reality disagrees.
                     me.set_state(State::UpToDate {
                         installed: version_for_task,
                         checked_at: now_string(),
+                    })
+                    .await;
+                }
+                Err(flash::FlashError::Cancelled) => {
+                    info!("firmware: flash cancelled by user");
+                    me.set_state(State::Failed {
+                        error: "user_cancelled".to_string(),
+                        when: now_string(),
+                    })
+                    .await;
+                }
+                Err(flash::FlashError::WaitForDeviceTimeout) => {
+                    warn!("firmware: flash timed out waiting for device button");
+                    me.set_state(State::Failed {
+                        error: "wait_for_device_timeout".to_string(),
+                        when: now_string(),
                     })
                     .await;
                 }

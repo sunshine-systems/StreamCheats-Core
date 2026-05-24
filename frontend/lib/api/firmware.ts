@@ -21,6 +21,18 @@ export type FirmwareStateKind =
   | "flashing"
   | "failed";
 
+/**
+ * Coarse phase the loader subprocess is currently in. The daemon
+ * advances it by pattern-matching teensy_loader_cli stdout — see
+ * `backend/src/firmware/flash.rs`. The UI stepper modal maps each
+ * value onto a step screen.
+ */
+export type FlashPhase =
+  | "starting"
+  | "waiting_for_device"
+  | "programming"
+  | "booting";
+
 export interface FirmwareState {
   kind: FirmwareStateKind;
   installed?: string | null;
@@ -40,6 +52,14 @@ export interface FirmwareState {
   // Present only when kind === "flashing".
   version?: string;
   started_at?: string;
+  /** Updates restructure: drives the stepper modal step. */
+  phase?: FlashPhase;
+  /**
+   * Updates restructure: last ~20 stdout/stderr lines from the loader.
+   * Capped daemon-side at `LOG_TAIL_CAP`. Used by the stepper modal
+   * to render recent loader output in a muted mono block.
+   */
+  log_tail?: string[];
   error?: string;
   when?: string;
 }
@@ -326,6 +346,58 @@ export async function ensureLoader(): Promise<EnsureLoaderResult> {
       ready: false,
       error: "network_error",
       message: e instanceof Error ? e.message : "network error",
+    };
+  }
+}
+
+/**
+ * Result of `POST /api/firmware/cancel_flash`. The daemon returns 202
+ * `{ ok: true }` when it signalled the supervision loop to kill the
+ * subprocess (subsequent state polls will show `Failed { error:
+ * "user_cancelled" }`), or 409 `{ ok: false, reason: "not_flashing" }`
+ * when nothing was in flight.
+ */
+export type CancelFlashResult =
+  | { ok: true }
+  | {
+      ok: false;
+      reason: "not_flashing" | "network" | "unknown";
+      detail?: string;
+    };
+
+/**
+ * Updates restructure: POST `/api/firmware/cancel_flash`. Used by the
+ * stepper modal's Cancel button in the `waiting_for_device` phase
+ * (NOT in `programming` — interrupting mid-write would brick the
+ * device). The daemon kills the subprocess and transitions to
+ * `Failed { error: "user_cancelled" }`; the polling status watcher
+ * picks the transition up on the next tick.
+ */
+export async function cancelFlash(): Promise<CancelFlashResult> {
+  const base = await resolveBase();
+  if (!base) return { ok: false, reason: "network" };
+  try {
+    const resp = await fetch(`${base}/api/firmware/cancel_flash`, {
+      method: "POST",
+    });
+    if (resp.status === 202) return { ok: true };
+    if (resp.status === 409) {
+      try {
+        const body = (await resp.json()) as { error?: string };
+        if (body.error === "not_flashing") {
+          return { ok: false, reason: "not_flashing" };
+        }
+        return { ok: false, reason: "unknown", detail: body.error };
+      } catch {
+        return { ok: false, reason: "unknown" };
+      }
+    }
+    return { ok: false, reason: "unknown", detail: `HTTP ${resp.status}` };
+  } catch (e) {
+    return {
+      ok: false,
+      reason: "network",
+      detail: e instanceof Error ? e.message : undefined,
     };
   }
 }

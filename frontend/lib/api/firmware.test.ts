@@ -9,6 +9,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
 import {
+  cancelFlash,
   checkNow,
   ensureLoader,
   flash,
@@ -228,6 +229,33 @@ describe("firmware.flashLocal", () => {
       ok: false,
       reason: "loader_unavailable",
     });
+  });
+});
+
+// Updates restructure: cancelFlash. Mirrors the flash() tests but the
+// surface is smaller — 202 → ok, 409 not_flashing → typed reason,
+// network failure → reason: "network".
+describe("firmware.cancelFlash", () => {
+  it("returns ok on 202", async () => {
+    expect(await cancelFlash()).toEqual({ ok: true });
+  });
+
+  it("maps 409 not_flashing to a typed reason", async () => {
+    server.use(
+      http.post(`${BASE}/api/firmware/cancel_flash`, () =>
+        HttpResponse.json({ ok: false, error: "not_flashing" }, { status: 409 })
+      )
+    );
+    expect(await cancelFlash()).toEqual({ ok: false, reason: "not_flashing" });
+  });
+
+  it("returns network on fetch failure", async () => {
+    server.use(
+      http.post(`${BASE}/api/firmware/cancel_flash`, () => HttpResponse.error())
+    );
+    const got = await cancelFlash();
+    expect(got.ok).toBe(false);
+    if (!got.ok) expect(got.reason).toBe("network");
   });
 });
 
