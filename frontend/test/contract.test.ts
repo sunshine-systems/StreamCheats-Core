@@ -89,7 +89,7 @@ describe("firmware contract", () => {
     ).toThrow();
   });
 
-  it("status response carries installed_version (nullable) + repo + channel + auto_check", () => {
+  it("status response carries installed_version (nullable) + repo + channel + auto_check + loader_ready", () => {
     const parsed = FirmwareStatusResponseSchema.parse({
       state: { kind: "idle" },
       installed_version: null,
@@ -98,9 +98,13 @@ describe("firmware contract", () => {
       board: null,
       auto_check: true,
       experimental_builds: false,
+      // SC-14: loader_ready is required — drift signal for the pre-
+      // flight loader-download UX.
+      loader_ready: false,
     });
     expect(parsed.installed_version).toBeNull();
     expect(parsed.auto_check).toBe(true);
+    expect(parsed.loader_ready).toBe(false);
   });
 
   it("rejects status with a missing required field (drift signal)", () => {

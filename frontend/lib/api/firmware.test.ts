@@ -10,6 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkNow,
+  ensureLoader,
   flash,
   flashLocal,
   getReleases,
@@ -17,6 +18,7 @@ import {
   startDownload,
 } from "./firmware";
 import {
+  EnsureLoaderResponseSchema,
   FirmwareCheckResponseSchema,
   FirmwareReleasesResponseSchema,
   FirmwareStatusResponseSchema,
@@ -211,5 +213,93 @@ describe("firmware.flashLocal", () => {
     } finally {
       process.env.NEXT_PUBLIC_STREAMCHEATS_HTTP_PORT = prev;
     }
+  });
+
+  it("maps 503 loader_unavailable to a typed reason (SC-14)", async () => {
+    server.use(
+      http.post(`${BASE}/api/firmware/flash_local`, () =>
+        HttpResponse.json(
+          { ok: false, error: "loader_unavailable" },
+          { status: 503 }
+        )
+      )
+    );
+    expect(await flashLocal("C:\\x\\y.hex")).toEqual({
+      ok: false,
+      reason: "loader_unavailable",
+    });
+  });
+});
+
+// SC-14: ensureLoader covers the happy path + each documented error
+// code. The schema parse asserts shapes line up with the daemon's
+// response (drift in either side fails the test loudly).
+describe("firmware.ensureLoader", () => {
+  it("returns ready: true on 200", async () => {
+    const got = await ensureLoader();
+    expect(got.ready).toBe(true);
+    // Round-trip through the schema as a contract check.
+    expect(() => EnsureLoaderResponseSchema.parse(got)).not.toThrow();
+    if (got.ready) {
+      expect(got.path).toMatch(/teensy_loader_cli\.exe$/);
+      expect(typeof got.sha256_verified).toBe("boolean");
+    }
+  });
+
+  it("maps 503 loader_url_not_configured", async () => {
+    server.use(
+      http.post(`${BASE}/api/firmware/ensure_loader`, () =>
+        HttpResponse.json(
+          {
+            ready: false,
+            error: "loader_url_not_configured",
+            message:
+              "Set firmware.loader_url in config.json to a Windows build of teensy_loader_cli.",
+          },
+          { status: 503 }
+        )
+      )
+    );
+    const got = await ensureLoader();
+    expect(got).toEqual({
+      ready: false,
+      error: "loader_url_not_configured",
+      message:
+        "Set firmware.loader_url in config.json to a Windows build of teensy_loader_cli.",
+    });
+    expect(() => EnsureLoaderResponseSchema.parse(got)).not.toThrow();
+  });
+
+  it("maps 503 sha256_mismatch", async () => {
+    server.use(
+      http.post(`${BASE}/api/firmware/ensure_loader`, () =>
+        HttpResponse.json(
+          {
+            ready: false,
+            error: "sha256_mismatch",
+            message: "expected aaa, got bbb",
+          },
+          { status: 503 }
+        )
+      )
+    );
+    const got = await ensureLoader();
+    expect(got.ready).toBe(false);
+    if (!got.ready) {
+      expect(got.error).toBe("sha256_mismatch");
+      expect(got.message).toContain("expected");
+    }
+  });
+
+  it("returns network_error on fetch failure", async () => {
+    server.use(
+      http.post(`${BASE}/api/firmware/ensure_loader`, () => HttpResponse.error())
+    );
+    const got = await ensureLoader();
+    expect(got).toEqual({
+      ready: false,
+      error: "network_error",
+      message: expect.any(String) as unknown as string,
+    });
   });
 });

@@ -34,6 +34,10 @@ export const firmwareStatusIdle: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: null,
     auto_check: true,
+    // SC-14: fresh-install state — loader hasn't been downloaded yet.
+    // The Updates page uses this to swap the flash button for a
+    // "Download flash tool" affordance in the confirm modal.
+    loader_ready: false,
     experimental_builds: false,
   });
 
@@ -49,6 +53,7 @@ export const firmwareStatusUpToDate: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: "teensy-4.1",
     auto_check: true,
+    loader_ready: true,
     experimental_builds: false,
   });
 
@@ -70,6 +75,7 @@ export const firmwareStatusAvailable: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: "teensy-4.1",
     auto_check: true,
+    loader_ready: true,
     experimental_builds: false,
   });
 
@@ -87,6 +93,7 @@ export const firmwareStatusDownloading: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: "teensy-4.1",
     auto_check: true,
+    loader_ready: true,
     experimental_builds: false,
   });
 
@@ -104,6 +111,7 @@ export const firmwareStatusReady: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: "teensy-4.1",
     auto_check: true,
+    loader_ready: true,
     experimental_builds: false,
   });
 
@@ -120,6 +128,7 @@ export const firmwareStatusFlashing: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: "teensy-4.1",
     auto_check: true,
+    loader_ready: true,
     experimental_builds: false,
   });
 
@@ -135,6 +144,7 @@ export const firmwareStatusFailed: FirmwareStatusResponse =
     repo: "sunshine-systems/Teensy-Core-1.59.0",
     board: "teensy-4.1",
     auto_check: true,
+    loader_ready: true,
     experimental_builds: false,
   });
 
