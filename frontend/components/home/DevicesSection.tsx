@@ -58,8 +58,7 @@ interface DeviceCardChromeProps {
   greyed: boolean;
   chip: React.ReactNode;
   imgAlt: string;
-  configureHref: string;
-  configureLabel: string;
+  action: React.ReactNode;
 }
 
 function DeviceCardChrome({
@@ -68,8 +67,7 @@ function DeviceCardChrome({
   greyed,
   chip,
   imgAlt,
-  configureHref,
-  configureLabel,
+  action,
 }: DeviceCardChromeProps) {
   return (
     <Card aria-label={`${label} device`} static>
@@ -108,25 +106,64 @@ function DeviceCardChrome({
           />
         </div>
 
-        <a
-          href={configureHref}
-          className="
-            self-start
-            inline-flex items-center gap-1
-            sc-chrome text-[10px] text-foliage
-            no-underline
-            transition-colors
-          "
-          style={{
-            transitionDuration: "var(--sc-dur-quick)",
-          }}
-          aria-label={configureLabel}
-        >
-          Configure
-          <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" />
-        </a>
+        {action}
       </div>
     </Card>
+  );
+}
+
+// Shared visual treatment for the bottom-of-card action. Renders as an
+// <a> when enabled (preserves navigation semantics + middle-click) and
+// a real disabled <button> when not — both look identical apart from
+// the muted ink and not-allowed cursor.
+const ACTION_BASE_CLASS = `
+  self-start
+  inline-flex items-center gap-1
+  px-2 py-1
+  border rounded-[3px]
+  sc-chrome text-[10px]
+  bg-transparent
+  no-underline
+  transition-colors
+`;
+
+function ConfigureAction({
+  href,
+  ariaLabel,
+}: {
+  href: string;
+  ariaLabel: string;
+}) {
+  return (
+    <a
+      href={href}
+      className={`${ACTION_BASE_CLASS} text-foliage border-[color:var(--sc-foliage)]/40 hover:border-[color:var(--sc-foliage)]/70`}
+      style={{ transitionDuration: "var(--sc-dur-quick)" }}
+      aria-label={ariaLabel}
+      role="button"
+    >
+      Configure
+      <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" />
+    </a>
+  );
+}
+
+function DisabledAction({
+  label,
+  ariaLabel,
+}: {
+  label: string;
+  ariaLabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      disabled
+      className={`${ACTION_BASE_CLASS} text-ink-dim border-hairline opacity-50 cursor-not-allowed`}
+      aria-label={ariaLabel}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -179,6 +216,12 @@ function MouseCard({
     </span>
   );
 
+  const action = detected ? (
+    <ConfigureAction href={configureHref} ariaLabel="Configure mouse" />
+  ) : (
+    <DisabledAction label="Not detected" ariaLabel="Mouse not detected" />
+  );
+
   return (
     <DeviceCardChrome
       label="Mouse"
@@ -186,18 +229,15 @@ function MouseCard({
       greyed={greyed}
       chip={chip}
       imgAlt="Teensy 4.1 microcontroller acting as the mouse device"
-      configureHref={configureHref}
-      configureLabel="Configure mouse"
+      action={action}
     />
   );
 }
 
 function KeyboardCard() {
-  // /keyboard is a "Coming soon" placeholder page — the link is still
-  // clickable on this greyed card so the user can land there and see
-  // the explanation rather than wondering why nothing happens.
-  const configureHref = useRelativeHref("/keyboard");
-
+  // Keyboard is permanently coming-soon — the action is a disabled
+  // button so the user can see the state at a glance rather than
+  // following a link into a placeholder page.
   const chip = (
     <span
       className="
@@ -223,8 +263,9 @@ function KeyboardCard() {
       greyed={true}
       chip={chip}
       imgAlt="Teensy 4.1 microcontroller (keyboard role, not yet available)"
-      configureHref={configureHref}
-      configureLabel="Configure keyboard"
+      action={
+        <DisabledAction label="Coming soon" ariaLabel="Keyboard coming soon" />
+      }
     />
   );
 }
