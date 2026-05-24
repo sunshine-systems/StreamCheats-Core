@@ -43,6 +43,43 @@ export default function UnseenLogCard() {
 
   const hasUnseen = summary.count > 0;
 
+  // 0-state per SC-7 follow-up: drop the big Fraunces "0" — a fresh
+  // install shouldn't shout a numeric badge at the user. Render a
+  // single muted line in JetBrains Mono and keep the card chrome.
+  if (!hasUnseen) {
+    return (
+      <Card aria-label="Unseen warnings and errors" static>
+        <div className="flex items-center justify-between gap-4">
+          <span
+            className="sc-chrome text-[11px] text-ink-muted"
+            aria-live="polite"
+          >
+            No unseen warnings or errors
+          </span>
+          <a
+            href={href}
+            className="
+              shrink-0
+              inline-flex items-center gap-1.5
+              sc-chrome text-[10px] text-foliage
+              px-2.5 py-1.5
+              border border-[color:var(--sc-foliage)]/30
+              rounded-[3px]
+              no-underline
+              transition-colors
+            "
+            style={{
+              transitionDuration: "var(--sc-dur-quick)",
+            }}
+          >
+            view all
+            <ArrowUpRight size={12} strokeWidth={2} aria-hidden="true" />
+          </a>
+        </div>
+      </Card>
+    );
+  }
+
   return (
     <Card aria-label="Unseen warnings and errors" static>
       <div className="flex items-start justify-between gap-4">
@@ -52,11 +89,10 @@ export default function UnseenLogCard() {
             style={{
               fontSize: "clamp(2.25rem, 7vw, 3rem)",
               // Count-up flourish per SC-7: foliage tinted when there
-              // are unseen items; falls back to ink for "0" so a calm
-              // home page doesn't shout. The numeric value updates as
-              // the log stream feeds new events into the hook — no
-              // separate animation loop required.
-              color: hasUnseen ? "var(--sc-foliage)" : "var(--sc-ink)",
+              // are unseen items. The numeric value updates as the log
+              // stream feeds new events into the hook — no separate
+              // animation loop required.
+              color: "var(--sc-foliage)",
               fontVariantNumeric: "tabular-nums",
               transition:
                 "color var(--sc-dur-base) var(--sc-ease-out)",
@@ -91,8 +127,7 @@ export default function UnseenLogCard() {
         </a>
       </div>
 
-      {hasUnseen ? (
-        <ul className="mt-5 flex flex-col divide-y divide-hairline">
+      <ul className="mt-5 flex flex-col divide-y divide-hairline">
           {summary.preview
             .slice()
             .reverse()
@@ -128,27 +163,20 @@ export default function UnseenLogCard() {
               </li>
             ))}
         </ul>
-      ) : (
-        <p className="mt-4 text-ink-dim text-[12px] leading-relaxed">
-          No new warnings or errors since you last visited the log.
-        </p>
-      )}
 
-      {hasUnseen ? (
-        <div className="mt-4 flex items-center gap-4 sc-chrome text-[10px] text-ink-dim">
-          <span>
-            <span className="text-danger">{summary.errorCount}</span>{" "}
-            error{summary.errorCount === 1 ? "" : "s"}
-          </span>
-          <span aria-hidden="true" className="opacity-40">
-            ·
-          </span>
-          <span>
-            <span className="text-warn">{summary.warnCount}</span>{" "}
-            warning{summary.warnCount === 1 ? "" : "s"}
-          </span>
-        </div>
-      ) : null}
+      <div className="mt-4 flex items-center gap-4 sc-chrome text-[10px] text-ink-dim">
+        <span>
+          <span className="text-danger">{summary.errorCount}</span>{" "}
+          error{summary.errorCount === 1 ? "" : "s"}
+        </span>
+        <span aria-hidden="true" className="opacity-40">
+          ·
+        </span>
+        <span>
+          <span className="text-warn">{summary.warnCount}</span>{" "}
+          warning{summary.warnCount === 1 ? "" : "s"}
+        </span>
+      </div>
     </Card>
   );
 }
