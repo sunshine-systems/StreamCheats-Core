@@ -25,6 +25,7 @@ use tracing::{info, warn};
 use crate::firmware::device::InstalledFirmware;
 use crate::http::state::AppState;
 
+
 /// `GET /api/firmware/status` — installed version (from heartbeat) +
 /// the current updater [`crate::firmware::State`] + the configured
 /// repo + the board reported by the most-recently-seen release asset
@@ -40,10 +41,11 @@ pub async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
     };
     let board = releases.first().map(|r| r.board.clone());
 
-    // SC-14: cheap synchronous "does the cached loader exist?" check.
-    // We do NOT shell out to `--help` on every status poll — that's
-    // reserved for the resolve path inside `start_flash` / the explicit
-    // `ensure_loader` endpoint.
+    // Cheap synchronous "is the bundled loader where we expect it?"
+    // check. We do NOT shell out to `--help` on every status poll —
+    // that's reserved for the resolve path inside `start_flash`.
+    // With a correct install this is always true; surface it so the UI
+    // can show a clear "please reinstall" error if it ever isn't.
     let loader_ready = state.firmware.loader_present();
 
     Json(json!({
@@ -58,68 +60,11 @@ pub async fn status(State(state): State<AppState>) -> Json<serde_json::Value> {
         "board": board,
         "auto_check": state.firmware.auto_check(),
         "experimental_builds": state.firmware.experimental(),
-        // SC-14: existence-only check for the cached loader. The UI uses
-        // this for a pre-flight on the flash button — when false the
-        // confirmation modal swaps the action for a "Download flash
-        // tool" button that POSTs `/api/firmware/ensure_loader`.
+        // Existence-only check for the bundled loader. With a correct
+        // install this is always true; the UI surfaces "Flash tool
+        // missing — please reinstall" when it isn't.
         "loader_ready": loader_ready,
     }))
-}
-
-/// `POST /api/firmware/ensure_loader` — SC-14. Resolves or downloads
-/// the Windows `teensy_loader_cli.exe` to `<data_dir>/bin/`. Returns:
-///
-///   200 `{ ready: true, path: "...", sha256_verified: bool }` — usable
-///   503 `{ ready: false, error: "<code>", message: "..." }` otherwise
-///
-/// Error codes:
-///   `loader_url_not_configured` — `firmware.loader_url` is empty
-///   `network_error`             — HTTP / connection failed
-///   `sha256_mismatch`           — downloaded body didn't hash to
-///                                 `firmware.loader_sha256`
-///   `download_failed`           — disk write / rename / probe failed
-pub async fn ensure_loader(State(state): State<AppState>) -> (StatusCode, Json<serde_json::Value>) {
-    use crate::firmware::loader::LoaderError;
-    match state.firmware.ensure_loader().await {
-        Ok(path) => {
-            let sha = state.firmware.loader_sha256.lock().await.clone();
-            let verified = !sha.trim().is_empty();
-            info!("firmware: ensure_loader ready at {}", path.display());
-            (
-                StatusCode::OK,
-                Json(json!({
-                    "ready": true,
-                    "path": path.to_string_lossy(),
-                    "sha256_verified": verified,
-                })),
-            )
-        }
-        Err(e) => {
-            let (code, message) = match &e {
-                LoaderError::UrlNotConfigured => (
-                    "loader_url_not_configured",
-                    "Set firmware.loader_url in config.json to a Windows build of teensy_loader_cli."
-                        .to_string(),
-                ),
-                LoaderError::Network(m) => ("network_error", m.clone()),
-                LoaderError::Sha256Mismatch { expected, got } => (
-                    "sha256_mismatch",
-                    format!("expected {}, got {}", expected, got),
-                ),
-                LoaderError::Io(m) => ("download_failed", m.clone()),
-                LoaderError::NotRunnable(m) => ("download_failed", m.clone()),
-            };
-            warn!("firmware: ensure_loader failed: {} ({})", code, message);
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(json!({
-                    "ready": false,
-                    "error": code,
-                    "message": message,
-                })),
-            )
-        }
-    }
 }
 
 /// `GET /api/firmware/releases` — full list of releases (sorted newest
@@ -186,9 +131,9 @@ pub async fn flash(
         }
         Err(e) => {
             warn!("firmware: flash rejected: {}", e);
-            // SC-14: surface loader-not-available as 503 so the UI can
-            // route the user back through the ensure_loader flow rather
-            // than treating it like a transient conflict.
+            // Surface loader-not-available as 503 so the UI can show a
+            // "please reinstall" message rather than treating it like a
+            // transient conflict.
             let status = if e == "loader_unavailable" {
                 StatusCode::SERVICE_UNAVAILABLE
             } else {

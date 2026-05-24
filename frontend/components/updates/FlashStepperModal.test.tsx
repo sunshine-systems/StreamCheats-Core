@@ -31,9 +31,6 @@ const baseProps = {
   onRetry: vi.fn(),
   onConfirm: vi.fn().mockResolvedValue({ ok: true }),
   onCancel: vi.fn().mockResolvedValue(undefined),
-  onEnsureLoader: vi
-    .fn()
-    .mockResolvedValue({ ready: true, path: "x", sha256_verified: true }),
 };
 
 function withPhase(
@@ -56,15 +53,17 @@ describe("FlashStepperModal", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders Download flash tool when loader_ready is false (SC-14)", () => {
+  it("renders the reinstall message and disables Flash when loader_ready is false", () => {
     const status: FirmwareStatusResponse = {
       ...firmwareStatusReady,
       loader_ready: false,
     };
     render(<FlashStepperModal {...baseProps} status={status} />);
     expect(
-      screen.getByRole("button", { name: /Download flash tool/i })
+      screen.getByText(/Flash tool is missing — please reinstall/i)
     ).toBeInTheDocument();
+    const flashBtn = screen.getByRole("button", { name: /^Flash$/ });
+    expect(flashBtn).toBeDisabled();
   });
 
   it("renders the WaitingForDevice step on phase=waiting_for_device", () => {

@@ -73,9 +73,10 @@ export interface FirmwareStatusResponse {
   auto_check: boolean;
   experimental_builds: boolean;
   /**
-   * SC-14: true when `<data_dir>/bin/teensy_loader_cli.exe` exists on
-   * disk. Cheap existence check — the UI uses it to pre-flight the
-   * flash flow before showing the confirmation modal's flash button.
+   * True when the bundled `teensy_loader_cli.exe` is where the daemon
+   * expects it (set by electron via STREAMCHEATS_TEENSY_LOADER_PATH).
+   * With a correct install this is always true; the UI surfaces a
+   * "Flash tool missing — please reinstall" message when it isn't.
    */
   loader_ready: boolean;
 }
@@ -112,9 +113,9 @@ export type FlashResult =
         | "unknown_version"
         | "unsupported_board"
         | "invalid_hex"
-        // SC-14: daemon couldn't resolve / download the loader binary.
-        // The UI should redirect the user back through
-        // ensureLoader() instead of treating this as transient.
+        // Daemon couldn't resolve the bundled loader binary. With a
+        // correct install this never fires; the UI surfaces a
+        // "please reinstall" message when it does.
         | "loader_unavailable"
         | "network"
         // Kept for legacy paths (e.g. an older daemon still returning
@@ -122,24 +123,6 @@ export type FlashResult =
         | "not_implemented"
         | "unknown";
       detail?: string;
-    };
-
-/**
- * SC-14: response from `POST /api/firmware/ensure_loader`. The daemon
- * returns 200 for ready (`{ ready: true, path, sha256_verified }`) or
- * 503 with a structured error code for everything else.
- */
-export type EnsureLoaderResult =
-  | { ready: true; path: string; sha256_verified: boolean }
-  | {
-      ready: false;
-      error:
-        | "loader_url_not_configured"
-        | "network_error"
-        | "sha256_mismatch"
-        | "download_failed"
-        | "unknown";
-      message: string;
     };
 
 async function resolveBase(): Promise<string | null> {
@@ -246,9 +229,9 @@ async function interpretFlashResponse(resp: Response): Promise<FlashResult> {
   if (resp.status === 202) {
     return { ok: true };
   }
-  // SC-14: daemon returns 503 when the loader binary can't be resolved
-  // or downloaded. The UI uses this to bounce the user back through
-  // ensureLoader() rather than presenting it as a transient conflict.
+  // Daemon returns 503 when the bundled loader binary can't be
+  // resolved (broken install). The UI surfaces a "please reinstall"
+  // message rather than presenting it as a transient conflict.
   if (resp.status === 503) {
     try {
       const body = (await resp.json()) as { error?: string };
@@ -287,67 +270,6 @@ async function interpretFlashResponse(resp: Response): Promise<FlashResult> {
     }
   }
   return { ok: false, reason: "unknown", detail: `HTTP ${resp.status}` };
-}
-
-/**
- * SC-14: POST `/api/firmware/ensure_loader`. Resolves or downloads the
- * Windows `teensy_loader_cli.exe` to `<data_dir>/bin/`. The UI calls
- * this from the flash confirmation modal when `status.loader_ready` is
- * false. Returns `{ ready: true, ... }` on success, or a structured
- * `{ ready: false, error, message }` on failure for the copper-tinted
- * error card with a Retry button.
- */
-export async function ensureLoader(): Promise<EnsureLoaderResult> {
-  const base = await resolveBase();
-  if (!base) {
-    return {
-      ready: false,
-      error: "network_error",
-      message: "Couldn't reach the daemon. Is StreamCheats running?",
-    };
-  }
-  try {
-    const resp = await fetch(`${base}/api/firmware/ensure_loader`, {
-      method: "POST",
-    });
-    // 200 ready=true, 503 ready=false with structured error code.
-    // Anything else we treat as unknown so the UI surfaces something
-    // rather than silently swallowing it.
-    if (resp.status === 200) {
-      const body = (await resp.json()) as {
-        ready: true;
-        path: string;
-        sha256_verified: boolean;
-      };
-      return body;
-    }
-    if (resp.status === 503) {
-      const body = (await resp.json()) as {
-        ready: false;
-        error: string;
-        message: string;
-      };
-      const error = (
-        ["loader_url_not_configured", "network_error", "sha256_mismatch", "download_failed"] as const
-      ).includes(body.error as never)
-        ? (body.error as EnsureLoaderResult extends { ready: false; error: infer E }
-            ? E
-            : never)
-        : "unknown";
-      return { ready: false, error, message: body.message };
-    }
-    return {
-      ready: false,
-      error: "unknown",
-      message: `HTTP ${resp.status}`,
-    };
-  } catch (e) {
-    return {
-      ready: false,
-      error: "network_error",
-      message: e instanceof Error ? e.message : "network error",
-    };
-  }
 }
 
 /**

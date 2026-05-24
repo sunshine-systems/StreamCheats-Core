@@ -186,26 +186,31 @@ app.whenReady().then(async () => {
     ? FRONTEND_DIR_DEV
     : null;
 
-  // SC-14: the daemon now self-resolves `teensy_loader_cli.exe`,
-  // downloading it on demand to `<data_dir>/bin/teensy_loader_cli.exe`
-  // via `POST /api/firmware/ensure_loader`. The old
-  // STREAMCHEATS_TEENSY_LOADER_PATH env var still works as a dev
-  // override (daemon picks it up if set + the file exists + `--help`
-  // runs cleanly) — useful when iterating on a custom-built binary
-  // without polluting the AppData cache. We only surface it in dev,
-  // and only when an actual file exists at the dev-default location.
-  let teensyLoaderPath = null;
-  if (!IS_PACKAGED) {
-    const devCandidate = path.join(PROJECT_ROOT, 'backend', 'vendor', 'teensy_loader_cli.exe');
-    if (fs.existsSync(devCandidate)) {
-      teensyLoaderPath = devCandidate;
-      logger.info(`[main] teensy_loader_cli dev override: ${teensyLoaderPath}`);
-    }
+  // The daemon resolves `teensy_loader_cli.exe` exclusively off the
+  // STREAMCHEATS_TEENSY_LOADER_PATH env var we set here. In packaged
+  // builds the binary is bundled by electron-builder's extraResources
+  // rule (see electron/package.json) and lives next to the daemon
+  // under `process.resourcesPath`. In dev we point the daemon at the
+  // checked-in copy under `backend/vendor/`. If the file is missing
+  // we still set the env var — the daemon's resolve will then fail
+  // loudly with `loader_unavailable` and the UI shows a reinstall
+  // prompt rather than silently degrading.
+  const teensyLoaderPath = IS_PACKAGED
+    ? path.join(process.resourcesPath, 'teensy_loader_cli.exe')
+    : path.join(PROJECT_ROOT, 'backend', 'vendor', 'teensy_loader_cli.exe');
+  if (!fs.existsSync(teensyLoaderPath)) {
+    logger.warn(
+      `[main] teensy_loader_cli not found at ${teensyLoaderPath} — ` +
+        'firmware flashing will fail until the binary is in place.'
+    );
+  } else {
+    logger.info(`[main] teensy_loader_cli: ${teensyLoaderPath}`);
   }
 
-  const daemonEnv = {};
+  const daemonEnv = {
+    STREAMCHEATS_TEENSY_LOADER_PATH: teensyLoaderPath,
+  };
   if (frontendDir) daemonEnv.STREAMCHEATS_FRONTEND_DIR = frontendDir;
-  if (teensyLoaderPath) daemonEnv.STREAMCHEATS_TEENSY_LOADER_PATH = teensyLoaderPath;
 
   splash.setStatus('starting daemon…');
   backend.spawnIfNeeded({

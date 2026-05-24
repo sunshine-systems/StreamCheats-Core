@@ -229,8 +229,6 @@ mod tests {
                 false,
                 crate::firmware::device::LastHeartbeat::new(),
                 tmp_root.clone(),
-                String::new(),
-                String::new(),
             )),
             experimental,
             running,

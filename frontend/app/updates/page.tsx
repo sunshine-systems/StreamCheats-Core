@@ -39,7 +39,6 @@ import { useUpdater } from "../../lib/hooks/useUpdater";
 import { useFirmwareStatus } from "../../lib/hooks/useFirmwareStatus";
 import {
   cancelFlash,
-  ensureLoader,
   flash,
 } from "../../lib/api/firmware";
 import { useRelativeHref } from "../../lib/route/href";
@@ -195,11 +194,6 @@ export default function UpdatesPage() {
           onRetry={onRetry}
           onConfirm={onFlashConfirm}
           onCancel={onFlashCancel}
-          onEnsureLoader={async () => {
-            const r = await ensureLoader();
-            if (r.ready) await fw.refresh();
-            return r;
-          }}
         />
       ) : null}
     </div>

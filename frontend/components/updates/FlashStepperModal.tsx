@@ -19,23 +19,23 @@
 // continues; the AppShell sidebar's flash indicator (Updates icon
 // turns copper) lets them get back to it.
 //
-// Pre-flight loader check (SC-14): on step 1, if status.loader_ready
-// is false, the Flash button is swapped for a Download-flash-tool
-// button that POSTs /api/firmware/ensure_loader. On success we refresh
-// status and flip back to the normal Flash button.
+// Loader pre-flight: the daemon resolves a bundled
+// `teensy_loader_cli.exe` set via STREAMCHEATS_TEENSY_LOADER_PATH by
+// the Electron shell. With a correct install `status.loader_ready` is
+// always true; if it ever isn't, the confirm step renders a clear
+// "Flash tool missing — please reinstall" error and disables the
+// flash button instead of trying to fetch anything.
 
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   Check,
-  Download,
   Loader2,
   RotateCcw,
   Zap,
 } from "lucide-react";
 
 import type {
-  EnsureLoaderResult,
   FirmwareStatusResponse,
   FlashResult,
 } from "../../lib/api/firmware";
@@ -76,8 +76,6 @@ export interface FlashStepperModalProps {
   onConfirm: () => Promise<FlashResult>;
   /** Cancel the in-flight flash (POSTs /api/firmware/cancel_flash). */
   onCancel: () => Promise<void>;
-  /** SC-14: pre-flight loader download. */
-  onEnsureLoader: () => Promise<EnsureLoaderResult>;
 }
 
 export default function FlashStepperModal({
@@ -88,7 +86,6 @@ export default function FlashStepperModal({
   onRetry,
   onConfirm,
   onCancel,
-  onEnsureLoader,
 }: FlashStepperModalProps) {
   // Close on ESC. Accessibility nicety. We do NOT cancel the flash on
   // ESC — closing the modal mid-flash is an intentional "navigate away"
@@ -134,7 +131,6 @@ export default function FlashStepperModal({
           onRetry={onRetry}
           onConfirm={onConfirm}
           onCancel={onCancel}
-          onEnsureLoader={onEnsureLoader}
         />
       </div>
     </div>
@@ -148,7 +144,6 @@ function StepBody(props: {
   onRetry: () => void;
   onConfirm: () => Promise<FlashResult>;
   onCancel: () => Promise<void>;
-  onEnsureLoader: () => Promise<EnsureLoaderResult>;
 }) {
   const { status } = props;
   const state = status?.state;
@@ -200,7 +195,6 @@ function StepBody(props: {
       status={props.status}
       onClose={props.onClose}
       onConfirm={props.onConfirm}
-      onEnsureLoader={props.onEnsureLoader}
     />
   );
 }
@@ -214,17 +208,13 @@ function ConfirmStep({
   status,
   onClose,
   onConfirm,
-  onEnsureLoader,
 }: {
   intent: FlashIntent;
   status: FirmwareStatusResponse | null;
   onClose: () => void;
   onConfirm: () => Promise<FlashResult>;
-  onEnsureLoader: () => Promise<EnsureLoaderResult>;
 }) {
   const loaderReady = status?.loader_ready ?? true;
-  const [loaderBusy, setLoaderBusy] = useState(false);
-  const [loaderError, setLoaderError] = useState<string | null>(null);
   const [dispatchError, setDispatchError] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
 
@@ -245,19 +235,6 @@ function ConfirmStep({
       }
     } finally {
       setDispatching(false);
-    }
-  };
-
-  const doEnsureLoader = async () => {
-    setLoaderError(null);
-    setLoaderBusy(true);
-    try {
-      const r = await onEnsureLoader();
-      if (!r.ready) {
-        setLoaderError(r.message || "Couldn't fetch the flash tool.");
-      }
-    } finally {
-      setLoaderBusy(false);
     }
   };
 
@@ -335,7 +312,7 @@ function ConfirmStep({
         </div>
       ) : null}
 
-      {!loaderReady && loaderError ? (
+      {!loaderReady ? (
         <div
           className="
             rounded-[6px] border border-[color:var(--sc-copper)]/40
@@ -344,58 +321,31 @@ function ConfirmStep({
           "
           role="alert"
         >
-          {loaderError}
+          Flash tool is missing — please reinstall StreamCheats Core.
         </div>
       ) : null}
 
-      {!loaderReady && loaderBusy ? (
-        <p className="sc-chrome text-[10px] text-copper" aria-live="polite">
-          Downloading flash tool…
-        </p>
-      ) : null}
-
       <div className="flex items-center justify-end gap-2">
-        <ActionButton tone="ghost" onClick={onClose} disabled={loaderBusy || dispatching}>
+        <ActionButton tone="ghost" onClick={onClose} disabled={dispatching}>
           Cancel
         </ActionButton>
-        {loaderReady ? (
-          <ActionButton
-            tone="copper"
-            onClick={() => void doConfirm()}
-            disabled={dispatching}
-          >
-            {dispatching ? (
-              <Loader2
-                size={12}
-                strokeWidth={1.75}
-                aria-hidden="true"
-                className="animate-spin"
-              />
-            ) : (
-              <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-            )}
-            Flash
-          </ActionButton>
-        ) : (
-          <ActionButton
-            tone="copper"
-            onClick={() => void doEnsureLoader()}
-            disabled={loaderBusy}
-            title="Fetch teensy_loader_cli.exe to your AppData folder"
-          >
-            {loaderBusy ? (
-              <Loader2
-                size={12}
-                strokeWidth={1.75}
-                aria-hidden="true"
-                className="animate-spin"
-              />
-            ) : (
-              <Download size={12} strokeWidth={1.75} aria-hidden="true" />
-            )}
-            {loaderError ? "Retry download" : "Download flash tool"}
-          </ActionButton>
-        )}
+        <ActionButton
+          tone="copper"
+          onClick={() => void doConfirm()}
+          disabled={dispatching || !loaderReady}
+        >
+          {dispatching ? (
+            <Loader2
+              size={12}
+              strokeWidth={1.75}
+              aria-hidden="true"
+              className="animate-spin"
+            />
+          ) : (
+            <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
+          )}
+          Flash
+        </ActionButton>
       </div>
     </>
   );
@@ -696,7 +646,7 @@ function flashErrorCopy(result: FlashResult): string {
         ? `Hex file rejected: ${result.detail}`
         : "Hex file rejected — must exist, be non-empty, and end in .hex.";
     case "loader_unavailable":
-      return "Flash tool isn't ready — download it first.";
+      return "Flash tool is missing — please reinstall StreamCheats Core.";
     case "not_implemented":
       return "Flash endpoint isn't wired in this daemon build.";
     case "network":

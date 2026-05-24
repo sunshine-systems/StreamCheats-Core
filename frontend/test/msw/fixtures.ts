@@ -34,10 +34,10 @@ export const firmwareStatusIdle: FirmwareStatusResponse =
     repo: "sunshine-systems/Firmware-Teensy-4.1",
     board: null,
     auto_check: true,
-    // SC-14: fresh-install state — loader hasn't been downloaded yet.
-    // The Updates page uses this to swap the flash button for a
-    // "Download flash tool" affordance in the confirm modal.
-    loader_ready: false,
+    // Loader is bundled in the installer; default fixture reflects a
+    // healthy install. A separate test flips this to false to exercise
+    // the "please reinstall" branch.
+    loader_ready: true,
     experimental_builds: false,
   });
 

@@ -109,10 +109,9 @@ export const FirmwareStatusResponseSchema = z.object({
   board: z.string().nullable(),
   auto_check: z.boolean(),
   experimental_builds: z.boolean(),
-  // SC-14: cheap synchronous "is the cached teensy_loader_cli.exe
-  // present?" flag. The UI uses it to pre-flight the flash flow —
-  // when false the confirmation modal swaps "I understand, flash" for
-  // "Download flash tool" which POSTs /api/firmware/ensure_loader.
+  // Cheap synchronous "is the bundled teensy_loader_cli.exe present?"
+  // flag. With a correct install this is always true; the UI surfaces
+  // a "Flash tool missing — please reinstall" message when it isn't.
   loader_ready: z.boolean(),
 });
 
@@ -164,28 +163,6 @@ export const FirmwareDispatchResponseSchema = z.union([
   FirmwareDispatchErrSchema,
 ]);
 
-// SC-14: ensure-loader endpoint. 200 carries `{ ready: true, path,
-// sha256_verified }`; 503 carries `{ ready: false, error, message }`.
-export const EnsureLoaderOkSchema = z.object({
-  ready: z.literal(true),
-  path: z.string(),
-  sha256_verified: z.boolean(),
-});
-export const EnsureLoaderErrSchema = z.object({
-  ready: z.literal(false),
-  error: z.enum([
-    "loader_url_not_configured",
-    "network_error",
-    "sha256_mismatch",
-    "download_failed",
-  ]),
-  message: z.string(),
-});
-export const EnsureLoaderResponseSchema = z.union([
-  EnsureLoaderOkSchema,
-  EnsureLoaderErrSchema,
-]);
-
 // Inferred types — these are the canonical TS shapes. `../firmware.ts`
 // exports compatible interfaces; we'd flip those to `z.infer<…>` in a
 // follow-up to remove the duplication.
@@ -195,4 +172,3 @@ export type FirmwareStatusResponse = z.infer<typeof FirmwareStatusResponseSchema
 export type FirmwareReleaseEntry = z.infer<typeof FirmwareReleaseEntrySchema>;
 export type FirmwareReleasesResponse = z.infer<typeof FirmwareReleasesResponseSchema>;
 export type FirmwareDispatchResponse = z.infer<typeof FirmwareDispatchResponseSchema>;
-export type EnsureLoaderResponse = z.infer<typeof EnsureLoaderResponseSchema>;
