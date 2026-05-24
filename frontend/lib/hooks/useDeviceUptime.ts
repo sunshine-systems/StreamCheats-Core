@@ -2,10 +2,18 @@
 
 // Tracks how long the StreamCheats device has been "not detected".
 //
-// We don't have a real device-heartbeat endpoint yet — the daemon's
-// loopback connection is the closest proxy. Treat `connected` from
-// `useConnectionStatus` as "device is talking to us"; anything else
-// (`connecting`, `disconnected`) is "not detected right now".
+// Source of truth is the daemon's heartbeat-derived
+// `installed_version` field on `GET /api/firmware/status`. The
+// firmware module declares the device `Unknown` after
+// `HEARTBEAT_TIMEOUT` (10s) without a `V:` heartbeat reply — at that
+// point `installed_version` flips to `null` and we treat the device
+// as not detected. This is the real serial-device heartbeat, NOT the
+// daemon loopback connection (`useConnectionStatus`) which only
+// reports whether the local HTTP server is reachable.
+//
+// Loading state: while the very first firmware status fetch is in
+// flight we report `detected: false, notDetectedFor: 0` so the chip
+// shows "Detecting…" rather than briefly flashing "Not detected".
 //
 // Returns:
 //   * `detected: boolean` — whether the device is currently reachable
@@ -20,7 +28,7 @@
 
 import { useEffect, useState } from "react";
 
-import { useConnectionStatus } from "./useConnectionStatus";
+import { useFirmwareStatus } from "./useFirmwareStatus";
 
 export interface DeviceUptimeState {
   detected: boolean;
@@ -29,15 +37,19 @@ export interface DeviceUptimeState {
 }
 
 export function useDeviceUptime(): DeviceUptimeState {
-  const { status } = useConnectionStatus();
-  const detected = status === "connected";
+  const { status, loaded } = useFirmwareStatus();
+  // `installed_version !== null` <=> heartbeat seen within the
+  // backend's HEARTBEAT_TIMEOUT (10s). Until the first poll lands we
+  // optimistically treat the device as not detected so the UI shows
+  // "Detecting…" rather than flashing "Connected" before truth arrives.
+  const detected = loaded && status?.installed_version != null;
 
   // `notDetectedSince` is canonical state, not a ref — the timer
   // derivation depends on it, and React's hook-purity rules prohibit
   // reading refs during render. It transitions exactly when the
-  // connection status crosses the detected/not-detected boundary.
+  // detection state crosses the boundary.
   const [notDetectedSince, setNotDetectedSince] = useState<Date | null>(
-    () => (status === "connected" ? null : new Date())
+    () => (detected ? null : new Date())
   );
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
 
@@ -45,8 +57,7 @@ export function useDeviceUptime(): DeviceUptimeState {
     // Anchor flips with the detection state. setState-in-effect is
     // appropriate here: the source of truth (`detected`) lives in a
     // sibling hook subscription, not in component props, so we have
-    // to bridge it into our own state. Pattern matches the existing
-    // disable in `useConnectionStatus.ts`.
+    // to bridge it into our own state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setNotDetectedSince((prev) => {
       if (detected) return null;
