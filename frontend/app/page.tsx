@@ -7,12 +7,15 @@
 //   2. Connected Devices section (Mouse + Keyboard cards)
 //   3. Unseen warnings / errors card (soft 0-state)
 //
-// A small build-version chip sits top-right of the PageHeader. It
-// pulls from useHealthDetail when the daemon is reachable and falls
+// Stripped header (v2): no H1 / lede paragraph — the eyebrow + version
+// chip alone do the job. Three real cards below carry the content.
+//
+// The build-version chip sits inline with the eyebrow (justify-between).
+// It pulls from useHealthDetail when the daemon is reachable and falls
 // back to the bundled frontend package version otherwise — the only
 // "always there" version source we have without adding a new endpoint.
 
-import PageHeader from "../components/ui/PageHeader";
+import Eyebrow from "../components/ui/Eyebrow";
 import DevicesSection from "../components/home/DevicesSection";
 import UpdatePendingBanner from "../components/home/UpdatePendingBanner";
 import UnseenLogCard from "../components/home/UnseenLogCard";
@@ -25,15 +28,10 @@ export default function HomePage() {
 
   return (
     <div className="px-5 sm:px-8 py-8 flex flex-col gap-6">
-      <div className="flex items-start justify-between gap-4">
-        <PageHeader
-          eyebrow="home · status"
-          title="Home"
-          sub="At-a-glance status for your StreamCheats device and the local daemon."
-          className="flex-1 min-w-0"
-        />
+      <div className="flex items-center justify-between gap-4">
+        <Eyebrow>home · status</Eyebrow>
         <span
-          className="sc-chrome text-[10px] text-ink-dim shrink-0 pt-1"
+          className="sc-chrome text-[10px] text-ink-dim shrink-0"
           aria-label={`App version v${version}`}
         >
           v{version}

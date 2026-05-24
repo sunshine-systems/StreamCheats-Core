@@ -2,26 +2,38 @@
 
 // Home > Connected Devices section.
 //
-// Replaces the prior "StreamCheats device = local daemon" framing with
-// two physical-device cards: Mouse (Teensy 4.1, live) and Keyboard
-// (Teensy 4.1, permanently coming-soon).
+// Two physical-device cards: Mouse (Teensy 4.1, live heartbeat) and
+// Keyboard (Teensy 4.1, permanently coming-soon).
 //
-// Mouse status chip:
-//   * Connected (foliage) — daemon is talking to us
-//   * Detecting… (muted) — daemon is unreachable for < 30s
-//   * Not detected for Xm Ys (copper) — ≥ 30s since last heartbeat
-// When not detected, photo + body are greyed via opacity-50; chip
-// keeps full color so the state itself remains legible.
+// Card content (top → bottom):
+//   1. Title (Fraunces)             — "Mouse" / "Keyboard"
+//   2. Subtitle (.sc-chrome dim)    — "Teensy 4.1"
+//   3. Image                        — `/teensy-4.1.jpg`
+//   4. Configure link (.sc-chrome)  — routes to /mouse or /keyboard
+// The status chip sits in the card's top-right corner. Mouse keeps
+// its full-colour chip even when the body is greyed, so the actual
+// status remains legible.
 //
-// The window is narrow (~730–970px), so when the two-column grid
-// can't fit, cards stack — visible content beats horizontal layout.
+// Mouse status chip — driven by `useDeviceUptime()` which now reads
+// the heartbeat-derived `installed_version` field rather than the
+// daemon loopback connection:
+//   * Connected (foliage) — heartbeat fresh (< 10s)
+//   * Detecting… (muted) — < 30s since heartbeat lost OR < 30s since
+//     page mount with no heartbeat ever seen
+//   * Not detected for Xm Ys (copper) — ≥ 30s with no heartbeat
+//
+// Layout: ALWAYS two columns side-by-side. The Electron window is
+// ~730px wide on 1080p; stacking would push the unseen-log card
+// below the fold. The image scales down with the column instead.
 
 import Image from "next/image";
+import { ArrowUpRight } from "lucide-react";
 
 import {
   formatDeviceUptime,
   useDeviceUptime,
 } from "../../lib/hooks/useDeviceUptime";
+import { useRelativeHref } from "../../lib/route/href";
 import Card from "../ui/Card";
 
 const NOT_DETECTED_GRACE_SECONDS = 30;
@@ -32,7 +44,7 @@ export default function DevicesSection() {
   return (
     <section
       aria-label="Connected devices"
-      className="grid gap-4 grid-cols-1 [@media(min-width:640px)]:grid-cols-2"
+      className="grid grid-cols-2 gap-3"
     >
       <MouseCard detected={detected} notDetectedFor={notDetectedFor} />
       <KeyboardCard />
@@ -46,6 +58,8 @@ interface DeviceCardChromeProps {
   greyed: boolean;
   chip: React.ReactNode;
   imgAlt: string;
+  configureHref: string;
+  configureLabel: string;
 }
 
 function DeviceCardChrome({
@@ -54,11 +68,13 @@ function DeviceCardChrome({
   greyed,
   chip,
   imgAlt,
+  configureHref,
+  configureLabel,
 }: DeviceCardChromeProps) {
   return (
     <Card aria-label={`${label} device`} static>
-      <div className="flex flex-col gap-4">
-        <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3">
+        <div className="flex items-start justify-between gap-2">
           <div
             className={`flex flex-col min-w-0 ${greyed ? "opacity-50" : ""}`}
           >
@@ -86,11 +102,29 @@ function DeviceCardChrome({
             src="/teensy-4.1.jpg"
             alt={imgAlt}
             fill
-            sizes="(max-width: 640px) 100vw, 50vw"
+            sizes="(max-width: 970px) 50vw, 480px"
             style={{ objectFit: "cover" }}
             priority={false}
           />
         </div>
+
+        <a
+          href={configureHref}
+          className="
+            self-start
+            inline-flex items-center gap-1
+            sc-chrome text-[10px] text-foliage
+            no-underline
+            transition-colors
+          "
+          style={{
+            transitionDuration: "var(--sc-dur-quick)",
+          }}
+          aria-label={configureLabel}
+        >
+          Configure
+          <ArrowUpRight size={11} strokeWidth={2} aria-hidden="true" />
+        </a>
       </div>
     </Card>
   );
@@ -104,6 +138,7 @@ function MouseCard({
   notDetectedFor: number | null;
 }) {
   const greyed = !detected;
+  const configureHref = useRelativeHref("/mouse");
 
   let chipLabel: string;
   let chipClass: string;
@@ -127,7 +162,7 @@ function MouseCard({
     <span
       className={`
         inline-flex items-center gap-2
-        px-2.5 py-1
+        px-2 py-1
         border rounded-[3px]
         sc-chrome text-[10px]
         shrink-0 whitespace-nowrap
@@ -151,16 +186,23 @@ function MouseCard({
       greyed={greyed}
       chip={chip}
       imgAlt="Teensy 4.1 microcontroller acting as the mouse device"
+      configureHref={configureHref}
+      configureLabel="Configure mouse"
     />
   );
 }
 
 function KeyboardCard() {
+  // /keyboard is a "Coming soon" placeholder page — the link is still
+  // clickable on this greyed card so the user can land there and see
+  // the explanation rather than wondering why nothing happens.
+  const configureHref = useRelativeHref("/keyboard");
+
   const chip = (
     <span
       className="
         inline-flex items-center gap-2
-        px-2.5 py-1
+        px-2 py-1
         border border-hairline rounded-[3px]
         sc-chrome text-[10px] text-ink-dim
         shrink-0 whitespace-nowrap
@@ -181,6 +223,8 @@ function KeyboardCard() {
       greyed={true}
       chip={chip}
       imgAlt="Teensy 4.1 microcontroller (keyboard role, not yet available)"
+      configureHref={configureHref}
+      configureLabel="Configure keyboard"
     />
   );
 }
