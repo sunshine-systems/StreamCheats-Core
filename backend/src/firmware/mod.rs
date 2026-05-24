@@ -41,7 +41,7 @@ use self::github::{Asset, Release};
 pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 /// Default firmware repo when `config.json` omits `firmware.repo`.
-pub const DEFAULT_REPO: &str = "sunshine-systems/Teensy-Core-1.59.0";
+pub const DEFAULT_REPO: &str = "sunshine-systems/Firmware-Teensy-4.1";
 
 /// Public-facing state machine. Serde-tagged so the `/api/firmware/status`
 /// JSON shape is `{ "state": { "kind": "...", ... } }`.

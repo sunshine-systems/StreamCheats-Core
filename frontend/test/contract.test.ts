@@ -94,7 +94,7 @@ describe("firmware contract", () => {
       state: { kind: "idle" },
       installed_version: null,
       channel: "unknown",
-      repo: "sunshine-systems/Teensy-Core-1.59.0",
+      repo: "sunshine-systems/Firmware-Teensy-4.1",
       board: null,
       auto_check: true,
       experimental_builds: false,

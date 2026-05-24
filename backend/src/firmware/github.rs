@@ -1,7 +1,7 @@
 //! Firmware GitHub Releases client.
 //!
 //! Same shape as [`crate::updater::github`] but pointed at a configurable
-//! firmware repo (defaults to `sunshine-systems/Teensy-Core-1.59.0`).
+//! firmware repo (defaults to `sunshine-systems/Firmware-Teensy-4.1`).
 //! Each release's assets are run through [`super::filename::parse`];
 //! releases with no firmware asset at all are skipped by the
 //! orchestrator, but the raw release set returned here is preserved so
@@ -96,7 +96,7 @@ mod tests {
     fn release_deserialises_with_minimal_fields() {
         let json = r#"{
             "tag_name": "rel-5.17",
-            "html_url": "https://github.com/sunshine-systems/Teensy-Core-1.59.0/releases/tag/rel-5.17",
+            "html_url": "https://github.com/sunshine-systems/Firmware-Teensy-4.1/releases/tag/rel-5.17",
             "published_at": "2026-05-20T12:00:00Z",
             "prerelease": false,
             "draft": false,
