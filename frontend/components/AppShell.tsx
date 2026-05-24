@@ -26,29 +26,59 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 
+import { getBridge } from "../lib/api/client";
 import { useAnyUpdatePending } from "../lib/hooks/useAnyUpdatePending";
 import { useExperimentalActive } from "../lib/hooks/useExperimentalStatus";
 import { useFirmwareStatus } from "../lib/hooks/useFirmwareStatus";
 import { type AppRoute, normalizeRoute, relativeHref } from "../lib/route/href";
 
-interface NavItem {
+// Sidebar entries are either navigation targets (rendered as <a> with
+// relative hrefs) or actions (rendered as <button> that fire an
+// imperative side-effect — currently only "open the dedicated Logs
+// window"). The kind discriminator keeps the rendering logic for the
+// two trivially distinguishable without sprinkling typeof checks.
+interface NavLinkItem {
+  kind: "link";
   route: AppRoute;
   label: string;
   Icon: LucideIcon;
 }
+interface NavActionItem {
+  kind: "action";
+  /**
+   * Stable key used in place of `route` for React identity. Not a real
+   * routable path — clicking the item fires an IPC call instead.
+   */
+  id: string;
+  label: string;
+  Icon: LucideIcon;
+}
+type NavItem = NavLinkItem | NavActionItem;
 
 // Top group renders in this order, with Settings pinned to the
 // bottom by a flex spacer + hairline separator above it.
 const TOP_ITEMS: NavItem[] = [
-  { route: "/", label: "Home", Icon: Home },
-  { route: "/mouse", label: "Mouse", Icon: Mouse },
-  { route: "/keyboard", label: "Keyboard", Icon: Keyboard },
-  { route: "/experimental", label: "Experimental Support", Icon: FlaskConical },
-  { route: "/updates", label: "Updates", Icon: Download },
-  { route: "/logs", label: "Logs", Icon: Terminal },
+  { kind: "link", route: "/", label: "Home", Icon: Home },
+  { kind: "link", route: "/mouse", label: "Mouse", Icon: Mouse },
+  { kind: "link", route: "/keyboard", label: "Keyboard", Icon: Keyboard },
+  {
+    kind: "link",
+    route: "/experimental",
+    label: "Experimental Support",
+    Icon: FlaskConical,
+  },
+  { kind: "link", route: "/updates", label: "Updates", Icon: Download },
+  // Logs is an action, not a route: clicking pops a dedicated
+  // BrowserWindow at 1200x800 via `window.streamcheats.openLogsWindow()`
+  // (which loads the `/logs/window/` static route). The in-shell
+  // `/logs` page is kept as a fallback target for callers that link
+  // there directly (LogPreview, the Home unseen-log card) and for
+  // browser-only dev sessions without the Electron bridge.
+  { kind: "action", id: "logs", label: "Logs", Icon: Terminal },
 ];
 
-const BOTTOM_ITEM: NavItem = {
+const BOTTOM_ITEM: NavLinkItem = {
+  kind: "link",
   route: "/settings",
   label: "Settings",
   Icon: Settings,
@@ -79,6 +109,19 @@ export default function AppShell({ children }: AppShellProps) {
   const firmwareFlashing =
     useFirmwareStatus().status?.state.kind === "flashing";
 
+  // The dedicated Logs BrowserWindow loads `/logs/window/` — a
+  // full-viewport renderer of <LogStream /> with no shell chrome. We
+  // detect that route here and bypass the sidebar entirely so the
+  // detached window doesn't render a tiny, useless navigation rail
+  // pointing back at routes that don't exist in its own context.
+  // The bypass is placed AFTER the hooks above (rules-of-hooks) so
+  // every render path calls the same hooks in the same order; the
+  // wasted work in the detached window is one tick of cached
+  // selectors and is otherwise free.
+  if (pathname && pathname.replace(/\/+$/, "") === "/logs/window") {
+    return <>{children}</>;
+  }
+
   return (
     // h-dvh + per-pane scrolling so the sidebar stays pinned while the
     // content area scrolls independently. (Previously this was
@@ -100,16 +143,21 @@ export default function AppShell({ children }: AppShellProps) {
         <nav className="flex flex-col">
           {TOP_ITEMS.map((item) => (
             <SidebarItem
-              key={item.route}
+              key={item.kind === "link" ? item.route : item.id}
               item={item}
-              active={current === item.route}
+              active={item.kind === "link" && current === item.route}
               pathname={pathname}
               pending={
-                (item.route === "/updates" &&
+                item.kind === "link" &&
+                ((item.route === "/updates" &&
                   (updatesPending || firmwareFlashing)) ||
-                (item.route === "/experimental" && experimentalActive)
+                  (item.route === "/experimental" && experimentalActive))
               }
-              flashing={item.route === "/updates" && firmwareFlashing}
+              flashing={
+                item.kind === "link" &&
+                item.route === "/updates" &&
+                firmwareFlashing
+              }
             />
           ))}
         </nav>
@@ -162,35 +210,51 @@ function SidebarItem({
    */
   flashing: boolean;
 }) {
-  const { Icon, label, route } = item;
-  // Plain <a> + relative href: see lib/route/href.ts for why we don't
-  // use next/link under the file:// origin Electron loads.
-  const href = relativeHref(pathname, route);
-  return (
-    <a
-      href={href}
-      aria-label={label}
-      aria-current={active ? "page" : undefined}
-      title={label}
-      className={`
-        group relative
-        flex items-center justify-center
-        h-11 w-full
-        text-[20px]
-        transition-colors
-        ${
-          active
-            ? "text-foliage"
-            : pending
-              ? "text-copper hover:text-copper"
-              : "text-ink-dim hover:text-ink-muted"
-        }
-      `}
-      style={{
-        transitionDuration: "var(--sc-dur-quick)",
-        transitionTimingFunction: "var(--sc-ease-out)",
-      }}
-    >
+  const { Icon, label } = item;
+
+  // Resolve a fallback URL for the dedicated logs window. This is
+  // used in two places: (1) as the href on a `<a>` element when the
+  // Electron bridge is missing (browser dev fallback), and (2) as the
+  // location.assign target when the bridge call rejects at runtime.
+  //
+  // The static export emits `/logs/window/index.html`, so we walk up
+  // from the current pathname and into `logs/window/` to produce a
+  // file://-safe relative URL. We can't use `relativeHref` here
+  // because `/logs/window` isn't in the AppRoute union (intentionally
+  // — it's not a navigable in-shell route, just a static target the
+  // Electron main process loads into a separate BrowserWindow).
+  const logsWindowHref = (() => {
+    const cur = pathname ?? "/";
+    const stripped = cur.replace(/\/+$/, "") || "/";
+    const fromSegments =
+      stripped === "/" ? [] : stripped.slice(1).split("/");
+    const ups =
+      fromSegments.length === 0 ? "./" : "../".repeat(fromSegments.length);
+    return `${ups}logs/window/`;
+  })();
+
+  const className = `
+    group relative
+    flex items-center justify-center
+    h-11 w-full
+    text-[20px]
+    transition-colors
+    ${
+      active
+        ? "text-foliage"
+        : pending
+          ? "text-copper hover:text-copper"
+          : "text-ink-dim hover:text-ink-muted"
+    }
+  `;
+
+  const style = {
+    transitionDuration: "var(--sc-dur-quick)",
+    transitionTimingFunction: "var(--sc-ease-out)",
+  };
+
+  const innerContent = (
+    <>
       {/* Active accent bar — flush left, 2px wide, foliage. */}
       <span
         aria-hidden="true"
@@ -256,6 +320,57 @@ function SidebarItem({
       >
         {label}
       </span>
+    </>
+  );
+
+  if (item.kind === "action") {
+    // The Logs item: call into the Electron main process to spawn (or
+    // focus) the dedicated logs window. Bridge-absent fallback
+    // (browser dev with no Electron) navigates to the static
+    // /logs/window/ page in the same window — strictly a dev-aid,
+    // production always has the bridge.
+    const handleClick = async () => {
+      const bridge = getBridge();
+      if (bridge && typeof bridge.openLogsWindow === "function") {
+        try {
+          await bridge.openLogsWindow();
+          return;
+        } catch {
+          /* fall through to URL fallback */
+        }
+      }
+      // Dev fallback only — assigns the current window's location.
+      if (typeof window !== "undefined") {
+        window.location.href = logsWindowHref;
+      }
+    };
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        aria-label={label}
+        title={label}
+        className={className}
+        style={style}
+      >
+        {innerContent}
+      </button>
+    );
+  }
+
+  // Plain <a> + relative href: see lib/route/href.ts for why we don't
+  // use next/link under the file:// origin Electron loads.
+  const href = relativeHref(pathname, item.route);
+  return (
+    <a
+      href={href}
+      aria-label={label}
+      aria-current={active ? "page" : undefined}
+      title={label}
+      className={className}
+      style={style}
+    >
+      {innerContent}
     </a>
   );
 }

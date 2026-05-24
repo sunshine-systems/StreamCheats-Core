@@ -20,12 +20,23 @@ export interface StreamCheatsBridge {
    * web-only dev runs see `undefined` here.
    */
   pickHexFile?: () => Promise<BridgePickHexFileResult>;
+  /**
+   * Open (or focus) the dedicated Logs window. Only present when the
+   * renderer is loaded inside Electron — absent in a plain `next dev`
+   * browser session.
+   */
+  openLogsWindow?: () => Promise<BridgeOpenLogsWindowResult>;
 }
 
 /** Shape returned by `window.streamcheats.pickHexFile()`. Never throws. */
 export type BridgePickHexFileResult =
   | { ok: true; path: string }
   | { ok: false; reason: "cancelled" | "unavailable" };
+
+/** Shape returned by `window.streamcheats.openLogsWindow()`. Never throws. */
+export type BridgeOpenLogsWindowResult =
+  | { ok: true }
+  | { ok: false; error?: string };
 
 /** Shape returned by `window.streamcheats.getBackendUrl()`. Never throws. */
 export type BridgeBackendUrlResult =

@@ -67,8 +67,106 @@ const PRELOAD = path.join(ELECTRON_DIR, 'preload.js');
 // ---------------------------------------------------------------------------
 
 let mainWindow = null;
+let logsWindow = null;
 let trayHandle = null;
 let isQuitting = false;
+
+// ---------------------------------------------------------------------------
+// Logs window factory
+// ---------------------------------------------------------------------------
+//
+// The Logs sidebar item pops a dedicated, wider BrowserWindow that
+// targets the static `/logs/window/` route — a full-viewport renderer
+// of the same <LogStream /> the in-shell page used, minus the AppShell
+// chrome. Sized 1200x800 by default and freely resizable so an
+// investigator can spread the firehose across a second monitor without
+// fighting the narrow main window.
+//
+// Only one logs window may exist at a time: a second invocation while
+// the first is alive just focuses the existing window. The reference
+// is nulled in the 'closed' handler so the next click recreates it.
+
+async function createLogsWindow() {
+  if (logsWindow && !logsWindow.isDestroyed()) {
+    if (logsWindow.isMinimized()) logsWindow.restore();
+    logsWindow.show();
+    logsWindow.focus();
+    return logsWindow;
+  }
+
+  // Resolve the daemon URL. Reuse the same target the main window
+  // already resolved against — if for some reason the port has
+  // shifted (daemon restart between window opens) we re-probe to
+  // pick it up.
+  const target = await windowService.resolveStartTarget({
+    isPackaged: IS_PACKAGED,
+    isDev: IS_DEV,
+    devUrl: FRONTEND_DEV_URL,
+  });
+
+  // Compose the URL for the /logs/window route. The Next static
+  // export emits `<base>/logs/window/index.html`. For the data:
+  // fallback (daemon never came up) we just load the same error
+  // page the main window would show — the dedicated window is
+  // useless without a daemon to stream from.
+  let loadUrl;
+  if (target.kind === 'url') {
+    const base = target.value.endsWith('/') ? target.value : `${target.value}/`;
+    loadUrl = `${base}logs/window/`;
+  } else {
+    loadUrl = target.value;
+  }
+
+  const win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    minWidth: 600,
+    minHeight: 400,
+    title: 'StreamCheats Logs',
+    icon: APP_ICON,
+    autoHideMenuBar: true,
+    backgroundColor: '#0d0f10',
+    show: false,
+    webPreferences: {
+      preload: PRELOAD,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  win.setMenuBarVisibility(false);
+
+  win.once('ready-to-show', () => {
+    if (!win.isDestroyed()) {
+      win.show();
+      win.focus();
+    }
+  });
+
+  win.on('closed', () => {
+    logsWindow = null;
+  });
+
+  try {
+    await win.loadURL(loadUrl);
+    logger.info(`[logs-window] loaded ${loadUrl}`);
+  } catch (err) {
+    logger.error(`[logs-window] loadURL failed: ${err && err.message}`);
+  }
+
+  logsWindow = win;
+  return win;
+}
+
+ipcMain.handle('logs-window:open', async () => {
+  try {
+    await createLogsWindow();
+    return { ok: true };
+  } catch (err) {
+    logger.error(`[logs-window] open failed: ${err && err.message}`);
+    return { ok: false, error: err && err.message };
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Single-instance lock (must run BEFORE app.whenReady)
