@@ -85,6 +85,14 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/firmware/download", post(firmware::download))
         .route("/api/firmware/flash", post(firmware::flash))
         .route("/api/firmware/flash_local", post(firmware::flash_local))
+        // SC-14: on-demand acquisition of `teensy_loader_cli.exe`. The
+        // UI pre-flights this before showing the flash confirmation
+        // modal; `status.loader_ready` tells the UI whether to call it
+        // first.
+        .route(
+            "/api/firmware/ensure_loader",
+            post(firmware::ensure_loader),
+        )
         // Experimental input-API control plane (SC-8). Lets the user
         // start/stop alternate listeners (today: kmbox-net) from the
         // Experimental Support page without restarting the daemon.

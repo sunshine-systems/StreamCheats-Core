@@ -186,23 +186,21 @@ app.whenReady().then(async () => {
     ? FRONTEND_DIR_DEV
     : null;
 
-  // SC-13: locate the bundled `teensy_loader_cli.exe` (if any) and
-  // surface its absolute path to the daemon via env. Packaged: lives
-  // under `resources/vendor/teensy_loader_cli.exe` (electron-builder
-  // extraResources rule); dev: lives under `backend/vendor/`. When
-  // absent we don't set the env var at all — the daemon's resolver
-  // falls through to its own dev-path checks, and the flash routes
-  // surface a clear error if the binary really isn't anywhere.
-  const teensyLoaderCandidates = IS_PACKAGED
-    ? [path.join(process.resourcesPath, 'vendor', 'teensy_loader_cli.exe')]
-    : [path.join(PROJECT_ROOT, 'backend', 'vendor', 'teensy_loader_cli.exe')];
-  const teensyLoaderPath = teensyLoaderCandidates.find((p) => fs.existsSync(p)) || null;
-  if (teensyLoaderPath) {
-    logger.info(`[main] teensy_loader_cli: ${teensyLoaderPath}`);
-  } else {
-    logger.warn(
-      `[main] teensy_loader_cli not bundled — firmware flash will return "binary_not_bundled" until the binary is dropped in (see SC-13 PR body).`
-    );
+  // SC-14: the daemon now self-resolves `teensy_loader_cli.exe`,
+  // downloading it on demand to `<data_dir>/bin/teensy_loader_cli.exe`
+  // via `POST /api/firmware/ensure_loader`. The old
+  // STREAMCHEATS_TEENSY_LOADER_PATH env var still works as a dev
+  // override (daemon picks it up if set + the file exists + `--help`
+  // runs cleanly) — useful when iterating on a custom-built binary
+  // without polluting the AppData cache. We only surface it in dev,
+  // and only when an actual file exists at the dev-default location.
+  let teensyLoaderPath = null;
+  if (!IS_PACKAGED) {
+    const devCandidate = path.join(PROJECT_ROOT, 'backend', 'vendor', 'teensy_loader_cli.exe');
+    if (fs.existsSync(devCandidate)) {
+      teensyLoaderPath = devCandidate;
+      logger.info(`[main] teensy_loader_cli dev override: ${teensyLoaderPath}`);
+    }
   }
 
   const daemonEnv = {};

@@ -19,6 +19,7 @@ pub mod download;
 pub mod filename;
 pub mod flash;
 pub mod github;
+pub mod loader;
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -147,6 +148,24 @@ pub struct FirmwareUpdater {
     /// can only host one write at a time and queueing makes the
     /// failure modes harder to reason about.
     pub flash_in_progress: Arc<AtomicBool>,
+    /// Resolved AppData root — the loader is cached at
+    /// `<data_dir>/bin/teensy_loader_cli.exe` (SC-14).
+    pub data_dir: PathBuf,
+    /// Optional URL to fetch the Windows build of `teensy_loader_cli`
+    /// from. Sourced from `firmware.loader_url` in config.json. Empty
+    /// when the maintainer hasn't hosted a binary yet — the daemon
+    /// then returns `loader_url_not_configured` from
+    /// `POST /api/firmware/ensure_loader` and refuses to flash.
+    pub loader_url: Arc<Mutex<String>>,
+    /// Optional SHA-256 of the loader binary at `loader_url`. Verified
+    /// during download; on mismatch the partial download is deleted.
+    /// Sourced from `firmware.loader_sha256` in config.json. Empty
+    /// means "skip verification" and emits a warning to the log.
+    pub loader_sha256: Arc<Mutex<String>>,
+    /// Memoised resolved loader path so the resolve probe (`--help`)
+    /// doesn't run on every flash. Cleared on resolve failure so the
+    /// next attempt re-probes from scratch.
+    pub loader_path: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl FirmwareUpdater {
@@ -155,6 +174,9 @@ impl FirmwareUpdater {
         auto_check_initial: bool,
         experimental_initial: bool,
         installed: LastHeartbeat,
+        data_dir: PathBuf,
+        loader_url: String,
+        loader_sha256: String,
     ) -> Self {
         let ua = format!("streamcheats-core/{}", env!("CARGO_PKG_VERSION"));
         // Reuse the updater module's client builder so the User-Agent
@@ -179,7 +201,48 @@ impl FirmwareUpdater {
             client,
             api_base: github::DEFAULT_API_BASE.to_string(),
             flash_in_progress: installed.flash_suspended(),
+            data_dir,
+            loader_url: Arc::new(Mutex::new(loader_url)),
+            loader_sha256: Arc::new(Mutex::new(loader_sha256)),
+            loader_path: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Cheap sync check used by `GET /api/firmware/status` — does the
+    /// cached loader exist on disk? Doesn't run `--help` (that's
+    /// reserved for the resolve path so we don't shell out every poll).
+    pub fn loader_present(&self) -> bool {
+        loader::loader_present(&self.data_dir)
+    }
+
+    /// Resolve OR download the loader. Memoises the result so repeat
+    /// flash attempts don't re-probe. On a failed download / probe the
+    /// cache is cleared so the next attempt starts fresh.
+    pub async fn ensure_loader(&self) -> Result<PathBuf, loader::LoaderError> {
+        // Fast path: memoised resolved path is still valid.
+        {
+            let guard = self.loader_path.lock().await;
+            if let Some(p) = guard.as_ref() {
+                if p.is_file() {
+                    return Ok(p.clone());
+                }
+            }
+        }
+        let url = self.loader_url.lock().await.clone();
+        let sha = self.loader_sha256.lock().await.clone();
+        let result = loader::ensure_loader(
+            &self.client,
+            &self.data_dir,
+            Some(url.as_str()),
+            Some(sha.as_str()),
+        )
+        .await;
+        let mut guard = self.loader_path.lock().await;
+        match &result {
+            Ok(p) => *guard = Some(p.clone()),
+            Err(_) => *guard = None,
+        }
+        result
     }
 
     pub async fn snapshot(&self) -> State {
@@ -456,6 +519,20 @@ impl FirmwareUpdater {
         hex_path: PathBuf,
         mcu: &'static str,
     ) -> Result<(), String> {
+        // SC-14: resolve the loader BEFORE we trip the single-flight
+        // flag. If the loader isn't downloaded yet AND ensure_loader
+        // can't fetch it (no URL configured, network failure, sha
+        // mismatch), we surface `loader_unavailable` synchronously so
+        // the route layer can return 503 — no `Flashing` state, no
+        // suspended heartbeat, no need to clean up the guard.
+        let loader_path = match self.ensure_loader().await {
+            Ok(p) => p,
+            Err(e) => {
+                warn!("firmware: flash refused — loader unavailable: {}", e);
+                return Err("loader_unavailable".to_string());
+            }
+        };
+
         // Single-flight: trip the flag with a CAS so two simultaneous
         // requests can't both win. The loser sees the existing `true`
         // and gets the stable `flash_in_progress` error code.
@@ -479,7 +556,7 @@ impl FirmwareUpdater {
         let version_for_task = version.clone();
         let hex_for_task = hex_path.clone();
         tokio::spawn(async move {
-            let outcome = flash::run_flash(mcu, &hex_for_task).await;
+            let outcome = flash::run_flash(&loader_path, mcu, &hex_for_task).await;
             // Clear the single-flight + heartbeat-suspension flag
             // BEFORE the state transition so anything reading
             // `installed_version` immediately afterwards sees the

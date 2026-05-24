@@ -52,9 +52,11 @@ import { useFirmwareReleases } from "../../lib/hooks/useFirmwareReleases";
 import { useFirmwareStatus } from "../../lib/hooks/useFirmwareStatus";
 import { useUpdater } from "../../lib/hooks/useUpdater";
 import {
+  ensureLoader,
   flash,
   flashLocal,
   pickHexFile,
+  type EnsureLoaderResult,
   type FirmwareReleaseEntry,
   type FlashResult,
 } from "../../lib/api/firmware";
@@ -131,12 +133,42 @@ function flashErrorCopy(result: FlashResult): string {
       return result.detail
         ? `Hex file rejected: ${result.detail}`
         : "Hex file rejected — must exist, be non-empty, and end in .hex.";
+    case "loader_unavailable":
+      return "Flash tool isn't ready — download it first from the confirmation dialog.";
     case "not_implemented":
       return "Flash endpoint isn't wired in this daemon build.";
     case "network":
       return "Couldn't reach the daemon. Is StreamCheats running?";
     default:
       return result.detail ?? "Flash failed.";
+  }
+}
+
+/**
+ * SC-14: human-readable copy for each ensure_loader failure code. Keeps
+ * the strings co-located with the action so the modal can render them
+ * inline without an indirect lookup.
+ */
+function loaderErrorCopy(result: EnsureLoaderResult): string {
+  if (result.ready) return "";
+  switch (result.error) {
+    case "loader_url_not_configured":
+      return (
+        "The flash tool download URL isn't configured yet. The maintainer " +
+        "needs to host a Windows build of teensy_loader_cli and set " +
+        "firmware.loader_url in config.json."
+      );
+    case "network_error":
+      return result.message || "Couldn't reach the download server.";
+    case "sha256_mismatch":
+      return (
+        "Downloaded file didn't match the expected checksum and was " +
+        "discarded. Retry, or check firmware.loader_sha256 in config.json."
+      );
+    case "download_failed":
+      return result.message || "Download failed.";
+    default:
+      return result.message || "Couldn't fetch the flash tool.";
   }
 }
 
@@ -169,7 +201,8 @@ function isDowngrade(
 }
 
 export default function FirmwareUpdatesSection() {
-  const { status, busy, loaded, runCheck, runDownload } = useFirmwareStatus();
+  const { status, busy, loaded, refresh, runCheck, runDownload } =
+    useFirmwareStatus();
   const { releases, loaded: releasesLoaded, refresh: refreshReleases } =
     useFirmwareReleases();
   const { experimental } = useUpdater();
@@ -181,12 +214,21 @@ export default function FirmwareUpdatesSection() {
   const board = status?.board ?? null;
   const chip = chipForKind(kind);
   const flashing = kind === "flashing";
+  // SC-14: when false, the confirm modal swaps the flash button for a
+  // "Download flash tool" button that POSTs ensure_loader. Default to
+  // true while loading so we don't briefly flash the wrong button.
+  const loaderReady = status?.loader_ready ?? true;
 
   // Modal-driven flash confirmation. Holds the pending intent until
   // the user confirms or cancels.
   const [confirm, setConfirm] = useState<FlashConfirmIntent | null>(null);
   const [flashError, setFlashError] = useState<string | null>(null);
   const [flashOk, setFlashOk] = useState<string | null>(null);
+  // SC-14: loader-download UI state. `loaderBusy` drives the spinner +
+  // disables the confirm button; `loaderError` shows the copper-tinted
+  // error card with a Retry inside the modal.
+  const [loaderBusy, setLoaderBusy] = useState(false);
+  const [loaderError, setLoaderError] = useState<string | null>(null);
 
   // Detect a flashing → up_to_date transition by stashing the previous
   // kind in component state. `setPrevKind` during render is the
@@ -221,6 +263,25 @@ export default function FirmwareUpdatesSection() {
       setFlashError(flashErrorCopy(r));
     }
   }, [confirm]);
+
+  // SC-14: pre-flight download of `teensy_loader_cli.exe`. Called from
+  // the confirm modal when `loader_ready` is false. On success we
+  // refresh status so the modal flips back to the normal flash CTA;
+  // on failure we render the copper-tinted error card with Retry.
+  const onEnsureLoader = useCallback(async () => {
+    setLoaderError(null);
+    setLoaderBusy(true);
+    try {
+      const r = await ensureLoader();
+      if (r.ready) {
+        await refresh();
+      } else {
+        setLoaderError(loaderErrorCopy(r));
+      }
+    } finally {
+      setLoaderBusy(false);
+    }
+  }, [refresh]);
 
   // Filter state
   const [channelFilter, setChannelFilter] = useState<ChannelFilter>("stable");
@@ -387,8 +448,15 @@ export default function FirmwareUpdatesSection() {
       {confirm ? (
         <ConfirmFlashModal
           intent={confirm}
-          onCancel={() => setConfirm(null)}
+          loaderReady={loaderReady}
+          loaderBusy={loaderBusy}
+          loaderError={loaderError}
+          onCancel={() => {
+            setConfirm(null);
+            setLoaderError(null);
+          }}
           onConfirm={() => void onConfirm()}
+          onEnsureLoader={() => void onEnsureLoader()}
         />
       ) : null}
     </section>
@@ -1016,12 +1084,20 @@ type FlashConfirmIntent =
 
 function ConfirmFlashModal({
   intent,
+  loaderReady,
+  loaderBusy,
+  loaderError,
   onCancel,
   onConfirm,
+  onEnsureLoader,
 }: {
   intent: FlashConfirmIntent;
+  loaderReady: boolean;
+  loaderBusy: boolean;
+  loaderError: string | null;
   onCancel: () => void;
   onConfirm: () => void;
+  onEnsureLoader: () => void;
 }) {
   // Close on ESC. Accessibility nicety — modal traps elsewhere are
   // overkill for a confirmation overlay in our two-button case.
@@ -1131,14 +1207,61 @@ function ConfirmFlashModal({
           </p>
         </div>
 
+        {/* SC-14: when the loader isn't cached, the action button
+            becomes "Download flash tool" instead of "I understand,
+            flash". On error we surface the structured copy plus a
+            Retry — the same button stays in place. */}
+        {!loaderReady && loaderError ? (
+          <div
+            className="
+              rounded-[6px] border border-[color:var(--sc-copper)]/40
+              bg-[color:var(--sc-copper)]/[0.06]
+              p-3 text-[12px] text-copper leading-relaxed
+            "
+            role="alert"
+          >
+            {loaderError}
+          </div>
+        ) : null}
+
+        {!loaderReady && loaderBusy ? (
+          <p
+            className="sc-chrome text-[10px] text-copper"
+            aria-live="polite"
+          >
+            Downloading flash tool…
+          </p>
+        ) : null}
+
         <div className="flex items-center justify-end gap-2">
-          <ActionButton tone="ghost" onClick={onCancel}>
+          <ActionButton tone="ghost" onClick={onCancel} disabled={loaderBusy}>
             Cancel
           </ActionButton>
-          <ActionButton tone="copper" onClick={onConfirm}>
-            <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-            I understand, flash
-          </ActionButton>
+          {loaderReady ? (
+            <ActionButton tone="copper" onClick={onConfirm}>
+              <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
+              I understand, flash
+            </ActionButton>
+          ) : (
+            <ActionButton
+              tone="copper"
+              onClick={onEnsureLoader}
+              disabled={loaderBusy}
+              title="Fetch teensy_loader_cli.exe to your AppData folder"
+            >
+              {loaderBusy ? (
+                <Loader2
+                  size={12}
+                  strokeWidth={1.75}
+                  aria-hidden="true"
+                  className="animate-spin"
+                />
+              ) : (
+                <Download size={12} strokeWidth={1.75} aria-hidden="true" />
+              )}
+              {loaderError ? "Retry download" : "Download flash tool"}
+            </ActionButton>
+          )}
         </div>
       </div>
     </div>
