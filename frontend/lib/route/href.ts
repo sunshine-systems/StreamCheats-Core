@@ -31,6 +31,10 @@ export type AppRoute =
   | "/keyboard"
   | "/experimental"
   | "/updates"
+  // Sub-page of /updates that hosts the full release archive + manual
+  // .hex picker. Added in the Updates restructure to keep the main
+  // /updates page focused on newer-versions-available.
+  | "/updates/firmware"
   | "/logs"
   | "/settings";
 
@@ -39,6 +43,7 @@ const KNOWN_ROUTES: ReadonlyArray<Exclude<AppRoute, "/">> = [
   "/keyboard",
   "/experimental",
   "/updates",
+  "/updates/firmware",
   "/logs",
   "/settings",
 ];
@@ -57,17 +62,33 @@ export function normalizeRoute(pathname: string | null): AppRoute {
 
 // Pure function form — exported for unit-testability and for callers
 // that have the pathname already in hand.
+//
+// With `trailingSlash: true`, every route lives at <segments>/index.html.
+// To go from `from` to `to`, we walk up by the segment count of `from`
+// (each segment of `from` is a directory we need to escape), then
+// append the segments of `to`.
+//
+// Examples (depth 1 routes are siblings, depth 2 routes nest):
+//   from "/"                 -> "/foo"            =>  "./foo/"
+//   from "/foo/"             -> "/"               =>  "../"
+//   from "/foo/"             -> "/bar"            =>  "../bar/"
+//   from "/"                 -> "/updates/firmware" =>  "./updates/firmware/"
+//   from "/updates/"         -> "/updates/firmware" =>  "../updates/firmware/"
+//   from "/updates/firmware/" -> "/updates"       =>  "../../updates/"
+//   from "/updates/firmware/" -> "/"              =>  "../../"
 export function relativeHref(from: string | null, to: AppRoute): string {
   const cur = normalizeRoute(from);
   if (cur === to) return "./";
-  // All non-root routes are siblings nested one directory deep under
-  // the export root. So:
-  //   from "/"        -> "/foo"  =>  "./foo/"
-  //   from "/foo/"    -> "/"     =>  "../"
-  //   from "/foo/"    -> "/bar"  =>  "../bar/"
-  if (cur === "/" && to !== "/") return `.${to}/`;
-  if (cur !== "/" && to === "/") return "../";
-  return `..${to}/`;
+  const fromSegments = cur === "/" ? [] : cur.slice(1).split("/");
+  const toSegments = to === "/" ? [] : to.slice(1).split("/");
+  // Walk up one level for each segment of the current path. We can't
+  // get cleverer (e.g. share a common prefix) because Next emits one
+  // index.html per route directory and the browser resolves against
+  // the *document URL*, not a synthetic base. The simpler "up-out
+  // then back down" form is correct in every case.
+  const ups = fromSegments.length === 0 ? "./" : "../".repeat(fromSegments.length);
+  const downs = toSegments.length === 0 ? "" : `${toSegments.join("/")}/`;
+  return `${ups}${downs}`;
 }
 
 // React hook form: reads the current pathname from Next's router.

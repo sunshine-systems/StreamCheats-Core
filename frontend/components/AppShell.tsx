@@ -28,6 +28,7 @@ import type { ReactNode } from "react";
 
 import { useAnyUpdatePending } from "../lib/hooks/useAnyUpdatePending";
 import { useExperimentalActive } from "../lib/hooks/useExperimentalStatus";
+import { useFirmwareStatus } from "../lib/hooks/useFirmwareStatus";
 import { type AppRoute, normalizeRoute, relativeHref } from "../lib/route/href";
 
 interface NavItem {
@@ -69,6 +70,14 @@ export default function AppShell({ children }: AppShellProps) {
   // means "a listener is currently running" — the state change with
   // side-effects users want unmistakable feedback on.
   const experimentalActive = useExperimentalActive();
+  // Updates restructure: distinct visual treatment for the active
+  // flash. Copper-tinted icon (matches `pending`) plus an animated
+  // pulse halo so the user can tell at a glance that the device is
+  // mid-flash and nav back to /updates/firmware will re-open the
+  // stepper modal. We deliberately extend with a new `flashing` flag
+  // rather than overload `pending` — same colour, different intensity.
+  const firmwareFlashing =
+    useFirmwareStatus().status?.state.kind === "flashing";
 
   return (
     // h-dvh + per-pane scrolling so the sidebar stays pinned while the
@@ -96,9 +105,11 @@ export default function AppShell({ children }: AppShellProps) {
               active={current === item.route}
               pathname={pathname}
               pending={
-                (item.route === "/updates" && updatesPending) ||
+                (item.route === "/updates" &&
+                  (updatesPending || firmwareFlashing)) ||
                 (item.route === "/experimental" && experimentalActive)
               }
+              flashing={item.route === "/updates" && firmwareFlashing}
             />
           ))}
         </nav>
@@ -115,6 +126,7 @@ export default function AppShell({ children }: AppShellProps) {
             active={current === BOTTOM_ITEM.route}
             pathname={pathname}
             pending={false}
+            flashing={false}
           />
         </nav>
       </aside>
@@ -131,6 +143,7 @@ function SidebarItem({
   active,
   pathname,
   pending,
+  flashing,
 }: {
   item: NavItem;
   active: boolean;
@@ -141,6 +154,13 @@ function SidebarItem({
    * bar; this only changes the icon color + adds a subtle glow halo.
    */
   pending: boolean;
+  /**
+   * Stronger variant of `pending` reserved for the Updates item while
+   * a firmware flash is in flight. Adds an animated pulse on top of
+   * the copper tint so the user can tell at a glance the device is
+   * mid-flash and clicking will re-open the stepper modal.
+   */
+  flashing: boolean;
 }) {
   const { Icon, label, route } = item;
   // Plain <a> + relative href: see lib/route/href.ts for why we don't
@@ -192,13 +212,22 @@ function SidebarItem({
         // Soft copper halo when something is pending. Pure-CSS glow so
         // we don't pull motion deps into the shell. Suppressed when
         // the item is the active route to avoid double-emphasis.
+        //
+        // Flashing variant pulses via Tailwind's animate-pulse — same
+        // copper colour, brighter shadow, looping opacity. Cheap and
+        // CSS-only so we don't have to plumb motion through here.
+        className={flashing && !active ? "animate-pulse" : undefined}
         style={
-          pending && !active
-            ? { filter: "drop-shadow(0 0 6px rgba(213, 130, 88, 0.55))" }
-            : undefined
+          flashing && !active
+            ? { filter: "drop-shadow(0 0 8px rgba(213, 130, 88, 0.75))" }
+            : pending && !active
+              ? { filter: "drop-shadow(0 0 6px rgba(213, 130, 88, 0.55))" }
+              : undefined
         }
       />
-      {pending && !active ? (
+      {flashing && !active ? (
+        <span className="sr-only"> (firmware flash in progress)</span>
+      ) : pending && !active ? (
         <span className="sr-only"> (update pending)</span>
       ) : null}
 

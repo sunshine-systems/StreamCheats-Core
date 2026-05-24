@@ -39,6 +39,12 @@ export const defaultHandlers = [
   http.post(`${BASE}/api/firmware/flash_local`, () =>
     HttpResponse.json({ ok: true }, { status: 202 })
   ),
+  // Updates restructure: cancel handler. Default accepts (202) so the
+  // happy-path UI tests don't have to opt in. Tests that exercise the
+  // "nothing was flashing" case override with server.use().
+  http.post(`${BASE}/api/firmware/cancel_flash`, () =>
+    HttpResponse.json({ ok: true }, { status: 202 })
+  ),
   // SC-14: ensure_loader defaults to "ready" so the bulk of UI tests
   // can keep treating the loader as a non-event. Tests that exercise
   // the missing / failed paths override this with server.use().

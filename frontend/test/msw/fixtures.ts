@@ -122,6 +122,15 @@ export const firmwareStatusFlashing: FirmwareStatusResponse =
       version: "rel-5.17",
       hex_path: "C:\\Users\\J\\AppData\\Local\\StreamCheats\\firmware\\rel-5.17.hex",
       started_at: "2026-05-22T18:05:00Z",
+      // Updates restructure: phase + log_tail drive the stepper modal.
+      phase: "programming",
+      log_tail: [
+        "Waiting for Teensy device...",
+        " (hint: press the reset button)",
+        "Found HalfKay Bootloader",
+        "Read \"...rel-5.17.hex\": 100352 bytes, 4.9% usage",
+        "Programming...............",
+      ],
     },
     installed_version: "rel-5.16",
     channel: "stable",

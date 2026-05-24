@@ -71,6 +71,10 @@ describe("firmware contract", () => {
         version: "rel-5.17",
         hex_path: "C:\\x\\y.hex",
         started_at: "2026-05-22T18:05:00Z",
+        // Updates restructure: phase + log_tail are now required on
+        // every Flashing snapshot the daemon emits.
+        phase: "waiting_for_device",
+        log_tail: ["Waiting for Teensy device..."],
       },
       {
         kind: "failed",
@@ -86,6 +90,31 @@ describe("firmware contract", () => {
   it("rejects an unknown State kind", () => {
     expect(() =>
       FirmwareStateSchema.parse({ kind: "exploding", error: "lol" })
+    ).toThrow();
+  });
+
+  it("rejects flashing without phase / log_tail (Updates restructure drift signal)", () => {
+    expect(() =>
+      FirmwareStateSchema.parse({
+        kind: "flashing",
+        version: "rel-5.17",
+        hex_path: "C:\\x\\y.hex",
+        started_at: "2026-05-22T18:05:00Z",
+        // phase + log_tail omitted — must fail.
+      })
+    ).toThrow();
+  });
+
+  it("rejects an unknown flash phase", () => {
+    expect(() =>
+      FirmwareStateSchema.parse({
+        kind: "flashing",
+        version: "rel-5.17",
+        hex_path: "C:\\x\\y.hex",
+        started_at: "2026-05-22T18:05:00Z",
+        phase: "exploding",
+        log_tail: [],
+      })
     ).toThrow();
   });
 

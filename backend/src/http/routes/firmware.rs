@@ -230,3 +230,24 @@ pub async fn flash_local(
         }
     }
 }
+
+/// `POST /api/firmware/cancel_flash` — kill the in-flight flash. Returns
+/// 202 `{ ok: true }` on dispatch (the supervision loop in
+/// [`crate::firmware::flash::run_flash`] will kill the subprocess and
+/// transition the state machine to `Failed { error: "user_cancelled", ... }`
+/// shortly after). Returns 409 `{ ok: false, error: "not_flashing" }`
+/// when nothing is in flight, so a stray button press doesn't silently
+/// no-op.
+pub async fn cancel_flash(
+    State(state): State<AppState>,
+) -> (StatusCode, Json<serde_json::Value>) {
+    if state.firmware.cancel_flash().await {
+        info!("firmware: cancel_flash signalled");
+        (StatusCode::ACCEPTED, Json(json!({ "ok": true })))
+    } else {
+        (
+            StatusCode::CONFLICT,
+            Json(json!({ "ok": false, "error": "not_flashing" })),
+        )
+    }
+}

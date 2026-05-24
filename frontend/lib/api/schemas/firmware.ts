@@ -61,11 +61,28 @@ export const FirmwareReadySchema = z.object({
   sha256: z.string(),
 });
 
+// Updates restructure: coarse phase tracker the daemon emits from
+// pattern-matched teensy_loader_cli stdout. The stepper modal in the
+// UI maps each phase to a step screen.
+export const FlashPhaseSchema = z.enum([
+  "starting",
+  "waiting_for_device",
+  "programming",
+  "booting",
+]);
+
 export const FirmwareFlashingSchema = z.object({
   kind: z.literal("flashing"),
   version: z.string(),
   hex_path: z.string(),
   started_at: z.string(),
+  // Updates restructure: drives the stepper modal step.
+  phase: FlashPhaseSchema,
+  // Last ~20 stdout/stderr lines from the loader, capped daemon-side
+  // (see `backend/src/firmware/flash.rs:LOG_TAIL_CAP`). The modal
+  // renders these in a muted mono block so the user can see what the
+  // loader is actually doing.
+  log_tail: z.array(z.string()),
 });
 
 export const FirmwareFailedSchema = z.object({
@@ -172,6 +189,7 @@ export const EnsureLoaderResponseSchema = z.union([
 // Inferred types — these are the canonical TS shapes. `../firmware.ts`
 // exports compatible interfaces; we'd flip those to `z.infer<…>` in a
 // follow-up to remove the duplication.
+export type FlashPhase = z.infer<typeof FlashPhaseSchema>;
 export type FirmwareState = z.infer<typeof FirmwareStateSchema>;
 export type FirmwareStatusResponse = z.infer<typeof FirmwareStatusResponseSchema>;
 export type FirmwareReleaseEntry = z.infer<typeof FirmwareReleaseEntrySchema>;

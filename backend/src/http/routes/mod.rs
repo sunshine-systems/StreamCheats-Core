@@ -85,6 +85,7 @@ pub fn build_router(state: AppState) -> Router {
         .route("/api/firmware/download", post(firmware::download))
         .route("/api/firmware/flash", post(firmware::flash))
         .route("/api/firmware/flash_local", post(firmware::flash_local))
+        .route("/api/firmware/cancel_flash", post(firmware::cancel_flash))
         // SC-14: on-demand acquisition of `teensy_loader_cli.exe`. The
         // UI pre-flights this before showing the flash confirmation
         // modal; `status.loader_ready` tells the UI whether to call it
