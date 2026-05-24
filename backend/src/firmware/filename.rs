@@ -4,13 +4,16 @@
 //!
 //! * Stable: `streamcheats_<board>_rel-<MAJOR>.<MINOR>.hex`
 //!   e.g. `streamcheats_teensy-4.1_rel-5.17.hex`
-//! * Nightly: `streamcheats_<board>_rel-<MAJOR>.<MINOR>-<commit>.hex`
+//! * Nightly: `streamcheats_<board>_rel-<MAJOR>.<MINOR>-<suffix>.hex`
 //!   e.g. `streamcheats_teensy-4.1_rel-5.17-ca8298b.hex`
+//!   or  `streamcheats_teensy-4.1_rel-5.18-dev-adab486.hex`
 //!
 //! Version is MAJOR.MINOR only — there is no patch component. Nightly
-//! is distinguished from stable purely by the `-<7-char hex commit>`
-//! suffix after the version. The `board` segment is read straight from
-//! the filename so future boards land without code changes.
+//! is distinguished from stable purely by the presence of *any* non-empty
+//! `-<suffix>` after the version. The suffix is preserved verbatim as
+//! the commit/label (e.g. `ca8298b`, `dev-adab486`, `rc1`). The `board`
+//! segment is read straight from the filename so future boards land
+//! without code changes.
 
 use std::fmt;
 
@@ -25,7 +28,9 @@ pub struct ParsedFilename {
     pub version: FirmwareVersion,
     /// `Stable` when no commit suffix; `Nightly` when present.
     pub channel: FirmwareChannel,
-    /// 7-char commit SHA for nightlies; `None` for stable.
+    /// Suffix after the `MAJOR.MINOR` version for nightlies; `None`
+    /// for stable. Typically a 7-char commit SHA (`ca8298b`) but any
+    /// non-empty suffix is accepted verbatim (`dev-adab486`, `rc1`).
     pub commit: Option<String>,
 }
 
@@ -101,10 +106,13 @@ pub fn parse(filename: &str) -> Option<ParsedFilename> {
         return None;
     }
 
-    // version_part is either `MAJOR.MINOR` or `MAJOR.MINOR-<commit>`.
+    // version_part is either `MAJOR.MINOR` or `MAJOR.MINOR-<suffix>`.
+    // The suffix is preserved verbatim — we accept any non-empty value
+    // (commit SHA, `dev-<sha>`, `rc1`, …) and treat its presence as the
+    // signal that this is a nightly release.
     let (version_str, commit) = match version_part.split_once('-') {
-        Some((v, c)) if is_short_sha(c) => (v, Some(c.to_lowercase())),
-        Some(_) => return None, // suffix present but not a valid short SHA
+        Some((v, c)) if !c.is_empty() => (v, Some(c.to_string())),
+        Some(_) => return None, // empty suffix is malformed
         None => (version_part, None),
     };
 
@@ -131,13 +139,6 @@ fn strip_hex_ext(filename: &str) -> Option<&str> {
     } else {
         None
     }
-}
-
-/// Validate a git short SHA — exactly 7 lowercase hex characters. The
-/// firmware repo standardises on 7 chars so anything else is treated as
-/// a malformed filename rather than a strange-but-valid nightly.
-fn is_short_sha(s: &str) -> bool {
-    s.len() == 7 && s.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
@@ -213,11 +214,42 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bad_commit_suffix() {
-        // Not 7 chars
-        assert!(parse("streamcheats_teensy-4.1_rel-5.17-abc.hex").is_none());
-        // Not hex
-        assert!(parse("streamcheats_teensy-4.1_rel-5.17-zzzzzzz.hex").is_none());
+    fn parses_nightly_with_dev_prefixed_suffix() {
+        // Real nightly release shape observed in the firmware repo
+        // (`rel-5.18-dev-adab486`). The "dev-" prefix is preserved as
+        // part of the suffix; the release is classified as nightly.
+        let p = parse("streamcheats_teensy-4.1_rel-5.18-dev-adab486.hex").unwrap();
+        assert_eq!(p.board, "teensy-4.1");
+        assert_eq!(
+            p.version,
+            FirmwareVersion {
+                major: 5,
+                minor: 18
+            }
+        );
+        assert_eq!(p.channel, FirmwareChannel::Nightly);
+        assert_eq!(p.commit.as_deref(), Some("dev-adab486"));
+        assert_eq!(p.display_version(), "rel-5.18-dev-adab486");
+    }
+
+    #[test]
+    fn parses_nightly_with_arbitrary_suffix() {
+        // Any non-empty suffix marks the release as nightly. Length
+        // and character set are not enforced — the firmware repo may
+        // grow new suffix conventions and we don't want to drop them.
+        let p = parse("streamcheats_teensy-4.1_rel-5.17-abc.hex").unwrap();
+        assert_eq!(p.channel, FirmwareChannel::Nightly);
+        assert_eq!(p.commit.as_deref(), Some("abc"));
+
+        let p = parse("streamcheats_teensy-4.1_rel-5.17-zzzzzzz.hex").unwrap();
+        assert_eq!(p.channel, FirmwareChannel::Nightly);
+        assert_eq!(p.commit.as_deref(), Some("zzzzzzz"));
+    }
+
+    #[test]
+    fn rejects_empty_commit_suffix() {
+        // `rel-5.17-` (trailing dash with no suffix) is malformed.
+        assert!(parse("streamcheats_teensy-4.1_rel-5.17-.hex").is_none());
     }
 
     #[test]

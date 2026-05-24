@@ -1,29 +1,26 @@
 "use client";
 
-// Updates page — Update Center (Updates restructure).
+// Updates page — Update Center (v2 restructure).
 //
-// Replaces the previous SC-9 unified page. Now focused exclusively on
-// "you have newer versions available". The full release archive +
-// manual .hex picker moved to /updates/firmware.
+// User-feedback v2:
+//   1. Dropped the H1 + description + divider. The eyebrow is the only
+//      chrome above the first card.
+//   2. Firmware update info is suppressed until the device has reported
+//      an installed version via heartbeat (same signal Home uses). Before
+//      that we treat firmware state as unknown and only act on software.
+//   3. The previous "one card per update type" layout was replaced by a
+//      single combined "Updates available" card listing both software
+//      and firmware rows. When nothing is pending we show an "up to
+//      date" card with a Check button instead.
+//   4. An "Install older firmware →" link is always present at the
+//      bottom, regardless of update state.
 //
-// Layout:
-//   - Header (eyebrow + H1)
-//   - Software update card  — only when software state is actionable
-//   - Firmware update card  — only when firmware state is actionable,
-//                             including `flashing` (so the user can
-//                             re-open the stepper modal mid-flash)
-//   - Empty state           — "You're up to date." + last-checked +
-//                             a single Check button, when both hooks
-//                             report idle/up_to_date
-//   - Secondary action      — link to /updates/firmware
-//
-// The Flash button on the firmware card opens the same
-// FlashStepperModal as the firmware sub-page — single source of truth.
+// The Flash button on the firmware row opens the same FlashStepperModal
+// used by /updates/firmware — single source of truth.
 
 import { useCallback, useState } from "react";
 import { Download, RefreshCw, RotateCcw, Sparkles, Zap } from "lucide-react";
 
-import PageHeader from "../../components/ui/PageHeader";
 import Card from "../../components/ui/Card";
 import Eyebrow from "../../components/ui/Eyebrow";
 import ActionButton from "../../components/updates/ActionButton";
@@ -84,9 +81,9 @@ function relativeTime(iso: string | null | undefined): string {
   return `${days}d ago`;
 }
 
-// Software-actionable states that justify rendering the card. We
-// intentionally drop `idle` and `up_to_date` — the empty state takes
-// over for "nothing to act on".
+// Software-actionable states that justify a row in the combined card.
+// `idle` and `up_to_date` are *not* actionable — the up-to-date card
+// owns the empty case.
 const SW_ACTIONABLE = new Set(["available", "downloading", "ready", "failed"]);
 // Firmware-actionable states. Includes `flashing` so the user can
 // re-open the stepper modal mid-flash after navigating away.
@@ -102,19 +99,26 @@ export default function UpdatesPage() {
   const sw = useUpdater();
   const fw = useFirmwareStatus();
 
+  // Fix #2: firmware UI only after a heartbeat has parsed an installed
+  // version. Until then `installed_version` is null and surfacing any
+  // firmware state ("available", "up_to_date", …) would be misleading
+  // because the daemon's check ran against an unknown installed baseline.
+  const deviceSeen = fw.status?.installed_version != null;
+
   const swKind = sw.state?.kind;
   const fwKind = fw.status?.state.kind;
   const swActionable = swKind != null && SW_ACTIONABLE.has(swKind);
-  const fwActionable = fwKind != null && FW_ACTIONABLE.has(fwKind);
-  const empty = !swActionable && !fwActionable;
+  const fwActionable =
+    deviceSeen && fwKind != null && FW_ACTIONABLE.has(fwKind);
+  const anyActionable = swActionable || fwActionable;
 
-  // Stepper-modal state. The Flash button on the firmware card opens
+  // Stepper-modal state. The Flash button on the firmware row opens
   // the modal in step 1 (Confirm). Once the daemon transitions into
   // Flashing, the modal switches itself to the relevant phase step.
   const [intent, setIntent] = useState<FlashIntent | null>(null);
   // Re-open the modal after navigation if we're flashing AND the user
-  // hasn't explicitly closed it. We use a separate "open" flag so the
-  // user can dismiss + re-open without losing the intent.
+  // hasn't explicitly closed it. Separate "open" flag so the user can
+  // dismiss + re-open without losing the intent.
   const [modalOpen, setModalOpen] = useState(false);
 
   const onOpenFlashFromAvailable = useCallback(() => {
@@ -134,8 +138,6 @@ export default function UpdatesPage() {
       return { ok: false as const, reason: "unknown" as const };
     }
     const r = await flash(intent.version);
-    // Tighten polling immediately so the modal flips to the flashing
-    // step on the next tick.
     await fw.refresh();
     return r;
   }, [intent, fw]);
@@ -146,43 +148,38 @@ export default function UpdatesPage() {
   }, [fw]);
 
   const onRetry = useCallback(() => {
-    // Re-open in confirm step. The daemon's state must be back to
-    // ready/available for the flash dispatch to succeed.
     setModalOpen(true);
   }, []);
 
+  // Check button on the empty-state card runs both checkers in parallel.
+  // We always call the software check; the firmware check is only useful
+  // when a device has been seen.
+  const onCheckBoth = useCallback(() => {
+    void sw.runCheck();
+    if (deviceSeen) void fw.runCheck();
+  }, [sw, fw, deviceSeen]);
+
   return (
-    <div className="px-5 sm:px-8 py-8 flex flex-col gap-8">
-      <PageHeader
-        eyebrow="system · update center"
-        title="Update Center"
-        sub="Newer versions available for your app and your StreamCheats device firmware."
-      />
+    <div className="px-5 sm:px-8 py-8 flex flex-col gap-6">
+      <Eyebrow>system · update center</Eyebrow>
 
-      {swActionable && sw.state ? (
-        <SoftwareUpdateCard
-          state={sw.state}
-          busy={sw.busy}
-          onCheck={() => void sw.runCheck()}
-          onDownload={() => void sw.runDownload()}
-          onInstall={() => void sw.runInstall()}
-        />
-      ) : null}
-
-      {fwActionable && fw.status ? (
-        <FirmwareUpdateCard
-          status={fw.status}
-          busy={fw.busy}
-          onCheck={() => void fw.runCheck()}
-          onDownload={(v) => void fw.runDownload(v)}
-          onFlash={onOpenFlashFromAvailable}
+      {anyActionable ? (
+        <UpdatesAvailableCard
+          swActionable={swActionable}
+          fwActionable={fwActionable}
+          sw={sw}
+          fw={fw}
+          onOpenFlashFromAvailable={onOpenFlashFromAvailable}
           onReopenModal={() => setModalOpen(true)}
         />
-      ) : null}
-
-      {empty ? <EmptyState fw={fw} sw={sw} /> : null}
-
-      <div aria-hidden="true" className="sc-hairline" />
+      ) : (
+        <UpToDateCard
+          fw={fw}
+          sw={sw}
+          deviceSeen={deviceSeen}
+          onCheck={onCheckBoth}
+        />
+      )}
 
       <InstallOlderFirmwareLink />
 
@@ -207,132 +204,211 @@ export default function UpdatesPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Software update card
+// Combined "Updates available" card — single container, one row per
+// update type. Rows share visual rhythm so software + firmware feel
+// like part of the same pending-work queue, not two separate features.
 // ---------------------------------------------------------------------------
 
-function SoftwareUpdateCard({
-  state,
-  busy,
-  onCheck,
-  onDownload,
-  onInstall,
+function UpdatesAvailableCard({
+  swActionable,
+  fwActionable,
+  sw,
+  fw,
+  onOpenFlashFromAvailable,
+  onReopenModal,
 }: {
-  state: NonNullable<ReturnType<typeof useUpdater>["state"]>;
-  busy: boolean;
-  onCheck: () => void;
-  onDownload: () => void;
-  onInstall: () => void;
+  swActionable: boolean;
+  fwActionable: boolean;
+  sw: ReturnType<typeof useUpdater>;
+  fw: ReturnType<typeof useFirmwareStatus>;
+  onOpenFlashFromAvailable: () => void;
+  onReopenModal: () => void;
 }) {
-  const kind = state.kind;
-  const chip = chipForKind(kind, true);
-  const installed = state.installed ?? "—";
   return (
-    <section
-      aria-label="Software update"
-      className="flex flex-col gap-3"
-    >
+    <section aria-label="Updates available" className="flex flex-col gap-3">
       <header className="flex items-center justify-between gap-3 flex-wrap">
-        <Eyebrow>software</Eyebrow>
-        <StateChip tone={chip.tone}>{chip.label}</StateChip>
+        <Eyebrow tone="copper">updates available</Eyebrow>
       </header>
-      <Card aria-label="Software update status" static>
-        <div className="flex items-start gap-4 flex-wrap">
-          <div className="flex flex-col min-w-0 flex-1">
-            <span className="sc-chrome text-[10px] text-ink-dim">
-              installed
-            </span>
-            <span className="font-mono text-ink text-[20px] leading-tight mt-1 break-all">
-              v{installed}
-            </span>
-            {kind === "available" || kind === "ready" ? (
-              <span className="sc-chrome text-[10px] text-copper mt-2">
-                latest · v{state.latest} · {state.channel}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="flex flex-col items-stretch gap-2 shrink-0">
-            {kind === "available" ? (
-              <ActionButton
-                tone="foliage"
-                onClick={onDownload}
-                disabled={busy}
-              >
-                <Download size={12} strokeWidth={1.75} aria-hidden="true" />
-                Download
-              </ActionButton>
-            ) : null}
-            {kind === "ready" ? (
-              <ActionButton
-                tone="copper"
-                onClick={onInstall}
-                disabled={busy}
-              >
-                <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />
-                Install &amp; restart
-              </ActionButton>
-            ) : null}
-            {kind === "failed" ? (
-              <ActionButton
-                tone="ghost"
-                onClick={onCheck}
-                disabled={busy}
-              >
-                <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
-                Try again
-              </ActionButton>
-            ) : null}
-          </div>
-        </div>
-
-        {kind === "downloading" ? (
-          <div className="mt-4">
-            <ProgressBar
-              percent={state.percent ?? null}
-              bytesSoFar={state.bytes_so_far}
-              totalBytes={state.total_bytes ?? null}
-              label={`Downloading v${state.latest ?? "—"}`}
+      <Card aria-label="Updates available" static>
+        <ul className="flex flex-col">
+          {swActionable && sw.state ? (
+            <SoftwareRow
+              state={sw.state}
+              busy={sw.busy}
+              onCheck={() => void sw.runCheck()}
+              onDownload={() => void sw.runDownload()}
+              onInstall={() => void sw.runInstall()}
             />
-          </div>
-        ) : null}
-
-        {kind === "available" && state.notes_url ? (
-          <p className="mt-3 text-[12px] text-ink-dim">
-            <a
-              href={state.notes_url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-foliage underline decoration-[color:var(--sc-foliage)]/40 underline-offset-2 hover:decoration-[color:var(--sc-foliage)]"
-            >
-              View release notes →
-            </a>
-          </p>
-        ) : null}
-
-        {kind === "failed" ? (
-          <p
-            className="mt-3 text-[12px] text-danger font-mono break-all"
-            role="alert"
-          >
-            {state.error ?? "Unknown error."}
-          </p>
-        ) : null}
+          ) : null}
+          {fwActionable && fw.status ? (
+            <FirmwareRow
+              status={fw.status}
+              busy={fw.busy}
+              onCheck={() => void fw.runCheck()}
+              onDownload={(v) => void fw.runDownload(v)}
+              onFlash={onOpenFlashFromAvailable}
+              onReopenModal={onReopenModal}
+            />
+          ) : null}
+        </ul>
       </Card>
     </section>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Firmware update card
+// Per-type rows. Each row lives inside the combined card.
 // ---------------------------------------------------------------------------
 
-function FirmwareUpdateCard({
+function UpdateRowFrame({
+  typeLabel,
+  installed,
+  latest,
+  channel,
+  kindChip,
+  actions,
+  body,
+  first,
+}: {
+  typeLabel: string;
+  installed: string;
+  latest?: string | null;
+  channel?: string | null;
+  kindChip: { tone: StateChipTone; label: string };
+  actions: React.ReactNode;
+  body?: React.ReactNode;
+  first: boolean;
+}) {
+  return (
+    <li
+      className={`flex flex-col gap-2 py-3 ${
+        first ? "" : "border-t border-hairline"
+      }`}
+    >
+      <div className="flex items-start gap-4 flex-wrap">
+        <div className="flex flex-col min-w-0 flex-1">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="sc-chrome text-[10px] text-ink-dim">
+              {typeLabel}
+            </span>
+            <StateChip tone={kindChip.tone}>{kindChip.label}</StateChip>
+          </div>
+          <span className="font-mono text-ink text-[16px] leading-tight mt-1 break-all">
+            {installed}
+          </span>
+          {latest ? (
+            <span className="sc-chrome text-[10px] text-copper mt-1">
+              latest · {latest}
+              {channel ? ` · ${channel}` : ""}
+            </span>
+          ) : null}
+        </div>
+        <div className="flex flex-col items-stretch gap-2 shrink-0">
+          {actions}
+        </div>
+      </div>
+      {body}
+    </li>
+  );
+}
+
+function SoftwareRow({
+  state,
+  busy,
+  onCheck,
+  onDownload,
+  onInstall,
+  first = true,
+}: {
+  state: NonNullable<ReturnType<typeof useUpdater>["state"]>;
+  busy: boolean;
+  onCheck: () => void;
+  onDownload: () => void;
+  onInstall: () => void;
+  first?: boolean;
+}) {
+  const kind = state.kind;
+  const chip = chipForKind(kind, true);
+  const installed = `v${state.installed ?? "—"}`;
+  const showLatest = kind === "available" || kind === "ready";
+  const actions = (
+    <>
+      {kind === "available" ? (
+        <ActionButton tone="foliage" onClick={onDownload} disabled={busy}>
+          <Download size={12} strokeWidth={1.75} aria-hidden="true" />
+          Download
+        </ActionButton>
+      ) : null}
+      {kind === "ready" ? (
+        <ActionButton tone="copper" onClick={onInstall} disabled={busy}>
+          <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />
+          Install &amp; restart
+        </ActionButton>
+      ) : null}
+      {kind === "failed" ? (
+        <ActionButton tone="ghost" onClick={onCheck} disabled={busy}>
+          <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
+          Try again
+        </ActionButton>
+      ) : null}
+    </>
+  );
+  const body = (
+    <>
+      {kind === "downloading" ? (
+        <div className="mt-1">
+          <ProgressBar
+            percent={state.percent ?? null}
+            bytesSoFar={state.bytes_so_far}
+            totalBytes={state.total_bytes ?? null}
+            label={`Downloading v${state.latest ?? "—"}`}
+          />
+        </div>
+      ) : null}
+      {kind === "available" && state.notes_url ? (
+        <p className="text-[12px] text-ink-dim">
+          <a
+            href={state.notes_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-foliage underline decoration-[color:var(--sc-foliage)]/40 underline-offset-2 hover:decoration-[color:var(--sc-foliage)]"
+          >
+            View release notes →
+          </a>
+        </p>
+      ) : null}
+      {kind === "failed" ? (
+        <p
+          className="text-[12px] text-danger font-mono break-all"
+          role="alert"
+        >
+          {state.error ?? "Unknown error."}
+        </p>
+      ) : null}
+    </>
+  );
+  return (
+    <UpdateRowFrame
+      typeLabel="software"
+      installed={installed}
+      latest={showLatest ? `v${state.latest}` : null}
+      channel={showLatest ? state.channel : null}
+      kindChip={chip}
+      actions={actions}
+      body={body}
+      first={first}
+    />
+  );
+}
+
+function FirmwareRow({
   status,
   busy,
   onCheck,
   onDownload,
   onFlash,
   onReopenModal,
+  first = false,
 }: {
   status: NonNullable<ReturnType<typeof useFirmwareStatus>["status"]>;
   busy: boolean;
@@ -340,144 +416,131 @@ function FirmwareUpdateCard({
   onDownload: (version: string) => void;
   onFlash: () => void;
   onReopenModal: () => void;
+  first?: boolean;
 }) {
   const state = status.state;
   const kind = state.kind;
   const chip = chipForKind(kind, false);
   const installed = status.installed_version ?? "—";
   const flashing = kind === "flashing";
-
-  return (
-    <section
-      aria-label="Firmware update"
-      className="flex flex-col gap-3"
-    >
-      <header className="flex items-center justify-between gap-3 flex-wrap">
-        <Eyebrow>firmware</Eyebrow>
-        <StateChip tone={chip.tone}>{chip.label}</StateChip>
-      </header>
-      <Card aria-label="Firmware update status" static>
-        <div className="flex items-start gap-4 flex-wrap">
-          <div className="flex flex-col min-w-0 flex-1">
-            <span className="sc-chrome text-[10px] text-ink-dim">
-              installed
-            </span>
-            <span className="font-mono text-ink text-[20px] leading-tight mt-1 break-all">
-              {installed}
-            </span>
-            {kind === "available" || kind === "ready" ? (
-              <span className="sc-chrome text-[10px] text-copper mt-2">
-                latest · {state.latest} · {state.channel}
-              </span>
-            ) : null}
-            {flashing ? (
-              <span className="sc-chrome text-[10px] text-copper mt-2">
-                flashing · {state.version ?? state.latest ?? "—"}
-              </span>
-            ) : null}
-          </div>
-
-          <div className="flex flex-col items-stretch gap-2 shrink-0">
-            {kind === "available" ? (
-              <ActionButton
-                tone="foliage"
-                onClick={() => state.latest && onDownload(state.latest)}
-                disabled={busy}
-              >
-                <Download size={12} strokeWidth={1.75} aria-hidden="true" />
-                Download
-              </ActionButton>
-            ) : null}
-            {kind === "ready" ? (
-              <ActionButton tone="copper" onClick={onFlash} disabled={busy}>
-                <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-                Flash
-              </ActionButton>
-            ) : null}
-            {flashing ? (
-              <ActionButton tone="copper" onClick={onReopenModal}>
-                <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-                View progress
-              </ActionButton>
-            ) : null}
-            {kind === "failed" ? (
-              <ActionButton
-                tone="ghost"
-                onClick={onCheck}
-                disabled={busy}
-              >
-                <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
-                Try again
-              </ActionButton>
-            ) : null}
-          </div>
+  const showLatest = kind === "available" || kind === "ready";
+  const latestStr = flashing
+    ? state.version ?? null
+    : showLatest
+      ? state.latest
+      : null;
+  const channelStr = showLatest ? state.channel : flashing ? "flashing" : null;
+  const actions = (
+    <>
+      {kind === "available" ? (
+        <ActionButton
+          tone="foliage"
+          onClick={() => state.latest && onDownload(state.latest)}
+          disabled={busy}
+        >
+          <Download size={12} strokeWidth={1.75} aria-hidden="true" />
+          Download
+        </ActionButton>
+      ) : null}
+      {kind === "ready" ? (
+        <ActionButton tone="copper" onClick={onFlash} disabled={busy}>
+          <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
+          Flash
+        </ActionButton>
+      ) : null}
+      {flashing ? (
+        <ActionButton tone="copper" onClick={onReopenModal}>
+          <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
+          View progress
+        </ActionButton>
+      ) : null}
+      {kind === "failed" ? (
+        <ActionButton tone="ghost" onClick={onCheck} disabled={busy}>
+          <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
+          Try again
+        </ActionButton>
+      ) : null}
+    </>
+  );
+  const body = (
+    <>
+      {kind === "downloading" ? (
+        <div className="mt-1">
+          <ProgressBar
+            percent={state.percent ?? null}
+            bytesSoFar={state.bytes_so_far}
+            totalBytes={state.total_bytes ?? null}
+            label={`Downloading ${state.latest ?? ""}`}
+          />
         </div>
-
-        {kind === "downloading" ? (
-          <div className="mt-4">
-            <ProgressBar
-              percent={state.percent ?? null}
-              bytesSoFar={state.bytes_so_far}
-              totalBytes={state.total_bytes ?? null}
-              label={`Downloading ${state.latest ?? ""}`}
-            />
-          </div>
-        ) : null}
-
-        {kind === "available" && state.notes_url ? (
-          <p className="mt-3 text-[12px] text-ink-dim">
-            <a
-              href={state.notes_url}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-foliage underline decoration-[color:var(--sc-foliage)]/40 underline-offset-2 hover:decoration-[color:var(--sc-foliage)]"
-            >
-              View release notes →
-            </a>
-          </p>
-        ) : null}
-
-        {kind === "failed" ? (
-          <p
-            className="mt-3 text-[12px] text-danger font-mono break-all"
-            role="alert"
+      ) : null}
+      {kind === "available" && state.notes_url ? (
+        <p className="text-[12px] text-ink-dim">
+          <a
+            href={state.notes_url}
+            target="_blank"
+            rel="noreferrer noopener"
+            className="text-foliage underline decoration-[color:var(--sc-foliage)]/40 underline-offset-2 hover:decoration-[color:var(--sc-foliage)]"
           >
-            {state.error ?? "Unknown error."}
-          </p>
-        ) : null}
-      </Card>
-    </section>
+            View release notes →
+          </a>
+        </p>
+      ) : null}
+      {kind === "failed" ? (
+        <p
+          className="text-[12px] text-danger font-mono break-all"
+          role="alert"
+        >
+          {state.error ?? "Unknown error."}
+        </p>
+      ) : null}
+    </>
+  );
+  return (
+    <UpdateRowFrame
+      typeLabel="firmware"
+      installed={installed}
+      latest={latestStr}
+      channel={channelStr}
+      kindChip={chip}
+      actions={actions}
+      body={body}
+      first={first}
+    />
   );
 }
 
 // ---------------------------------------------------------------------------
-// Empty state
+// Up-to-date card — replaces both the empty state and the per-type
+// "up to date" rendering in one tidy muted card.
 // ---------------------------------------------------------------------------
 
-function EmptyState({
+function UpToDateCard({
   fw,
   sw,
+  deviceSeen,
+  onCheck,
 }: {
   fw: ReturnType<typeof useFirmwareStatus>;
   sw: ReturnType<typeof useUpdater>;
+  deviceSeen: boolean;
+  onCheck: () => void;
 }) {
-  // Pick the most recent checked_at between the two — that's the most
-  // accurate "last checked anything" timestamp for the user.
+  // Pick the most recent checked_at between software and (when relevant)
+  // firmware. When no device has been seen we only ever consider the
+  // software timestamp — firmware state may be present in the API
+  // response but we don't surface it on this page, so it shouldn't drive
+  // "last checked" either.
   const swCheck =
     sw.state?.kind === "up_to_date" ? sw.state.checked_at : undefined;
   const fwCheck =
-    fw.status?.state.kind === "up_to_date"
+    deviceSeen && fw.status?.state.kind === "up_to_date"
       ? fw.status.state.checked_at
       : undefined;
   const lastChecked = pickLatestIso(swCheck, fwCheck);
 
-  const onCheck = () => {
-    void sw.runCheck();
-    void fw.runCheck();
-  };
-
   return (
-    <Card aria-label="No updates available" static>
+    <Card aria-label="Up to date" static>
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div className="flex flex-col gap-1 min-w-0 flex-1">
           <span className="text-[14px] text-ink leading-snug">
@@ -493,7 +556,7 @@ function EmptyState({
           disabled={sw.busy || fw.busy}
         >
           <RefreshCw size={12} strokeWidth={1.75} aria-hidden="true" />
-          Check for updates
+          Check again
         </ActionButton>
       </div>
     </Card>
@@ -515,7 +578,7 @@ function pickLatestIso(
 }
 
 // ---------------------------------------------------------------------------
-// Install older firmware link
+// Install older firmware link — persistent, hairline, full-width chrome.
 // ---------------------------------------------------------------------------
 
 function InstallOlderFirmwareLink() {
@@ -524,24 +587,20 @@ function InstallOlderFirmwareLink() {
     <a
       href={href}
       className="
-        group inline-flex items-center justify-between gap-3
-        px-4 py-3 -mx-1
-        rounded-[8px] border border-hairline
-        bg-substrate-2
-        text-ink-muted hover:text-ink hover:border-hairline-2
+        group inline-flex items-center justify-between gap-3 w-full
+        px-4 py-3
+        rounded-[6px] border border-hairline
+        bg-transparent
+        sc-chrome text-[11px] text-ink-muted
+        hover:text-ink hover:border-hairline-2
         transition-colors
       "
       style={{ transitionDuration: "var(--sc-dur-quick)" }}
     >
-      <div className="flex flex-col">
-        <span className="text-[13px]">Install older firmware</span>
-        <span className="sc-chrome text-[10px] text-ink-dim mt-0.5">
-          full release archive · manual .hex picker · downgrades
-        </span>
-      </div>
+      <span>install older firmware</span>
       <span
         aria-hidden="true"
-        className="text-foliage text-[14px] group-hover:translate-x-0.5 transition-transform"
+        className="text-foliage text-[12px] group-hover:translate-x-0.5 transition-transform"
         style={{ transitionDuration: "var(--sc-dur-quick)" }}
       >
         →
