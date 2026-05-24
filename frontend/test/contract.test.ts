@@ -173,15 +173,35 @@ describe("experimental contract", () => {
     ).not.toThrow();
   });
 
-  it("status accepts bound = null when stopped", () => {
+  it("status accepts bound = null when stopped and carries listen_ip/udp_port/device_mac", () => {
     const parsed = ExperimentalStatusSchema.parse({
       active: "kmbox-net",
       enabled: false,
       running: false,
       bound: null,
+      listen_ip: "127.0.0.1",
+      udp_port: 8888,
+      device_mac: "01FBC068",
       last_error: null,
     });
     expect(parsed.running).toBe(false);
+    expect(parsed.listen_ip).toBe("127.0.0.1");
+    expect(parsed.udp_port).toBe(8888);
+    expect(parsed.device_mac).toBe("01FBC068");
+  });
+
+  it("rejects status missing listen_ip/udp_port/device_mac (drift signal)", () => {
+    expect(() =>
+      ExperimentalStatusSchema.parse({
+        active: "kmbox-net",
+        enabled: false,
+        running: false,
+        bound: null,
+        // listen_ip / udp_port / device_mac omitted — must fail so the
+        // Experimental info panel never silently loses its source data.
+        last_error: null,
+      })
+    ).toThrow();
   });
 
   it("action response envelope: ok + status + optional error", () => {
@@ -194,6 +214,9 @@ describe("experimental contract", () => {
           enabled: true,
           running: true,
           bound: "127.0.0.1:14598",
+          listen_ip: "127.0.0.1",
+          udp_port: 8888,
+          device_mac: "01FBC068",
           last_error: null,
         },
       })

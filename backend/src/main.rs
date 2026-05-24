@@ -705,6 +705,7 @@ fn run(
         translator.clone(),
         settings.listen_addr,
         settings.udp_port,
+        settings.device_mac_str.clone(),
         running.clone(),
         cwd_for_http.clone(),
     );

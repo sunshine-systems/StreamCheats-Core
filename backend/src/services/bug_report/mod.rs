@@ -207,6 +207,7 @@ mod tests {
             translator,
             "127.0.0.1".parse().unwrap(),
             0,
+            "01FBC068".to_string(),
             running.clone(),
             cwd.clone(),
         );

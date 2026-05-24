@@ -7,7 +7,8 @@
 // against e.g. the kmbox-net UDP protocol can drive the device through
 // the daemon. Default off; this is opt-in.
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Check, Copy } from "lucide-react";
 
 import PageHeader from "../../components/ui/PageHeader";
 import Card from "../../components/ui/Card";
@@ -139,7 +140,153 @@ export default function ExperimentalPage() {
           ) : null}
         </div>
       </Card>
+
+      {status?.enabled === true && status?.running === true ? (
+        <ConnectionInfoPanel
+          listenIp={status.listen_ip}
+          udpPort={status.udp_port}
+          deviceMac={status.device_mac}
+          bound={status.bound}
+        />
+      ) : null}
     </div>
+  );
+}
+
+/**
+ * Insert a colon every 2 hex characters so `01FBC068` reads as
+ * `01:FB:C0:68` — matches how the kmbox-net protocol docs print the
+ * device identifier and makes it easier to type-check at a glance. The
+ * underlying source-of-truth value (un-colonised) is what gets copied
+ * to the clipboard so users can paste straight into their tool's
+ * config.
+ */
+function formatMac(raw: string): string {
+  const cleaned = raw.replace(/[^0-9a-fA-F]/g, "").toUpperCase();
+  if (cleaned.length === 0) return raw;
+  return cleaned.match(/.{1,2}/g)?.join(":") ?? raw;
+}
+
+function ConnectionInfoPanel({
+  listenIp,
+  udpPort,
+  deviceMac,
+  bound,
+}: {
+  listenIp: string;
+  udpPort: number;
+  deviceMac: string;
+  bound: string | null;
+}) {
+  // Rows are built up so we can include the bound socket address only
+  // when the daemon reports one — kernel-assigned port differences
+  // (config says 0, kernel binds 14598) are surfaced as a separate
+  // "Bound" row rather than overwriting the configured UDP Port value.
+  const rows: Array<{ label: string; value: string; copyValue?: string }> = [
+    { label: "Listening IP", value: listenIp },
+    { label: "UDP Port", value: String(udpPort) },
+    {
+      label: "Device MAC",
+      value: formatMac(deviceMac),
+      // External tools usually expect the raw 8-hex-char form (no
+      // separators), so copy that — not the prettified colon form.
+      copyValue: deviceMac,
+    },
+  ];
+  if (bound && bound !== `${listenIp}:${udpPort}`) {
+    rows.push({ label: "Bound", value: bound });
+  }
+
+  return (
+    <Card aria-label="Active KMBOX Net connection info" static>
+      <div className="flex flex-col gap-4">
+        <header className="flex items-center justify-between gap-3">
+          <Eyebrow tone="copper">active connection info</Eyebrow>
+        </header>
+        <p className="text-ink-muted text-[13px] leading-relaxed">
+          Point your external kmbox-net client at the values below. Click
+          any value to copy.
+        </p>
+        <ul className="flex flex-col gap-2">
+          {rows.map((row) => (
+            <InfoRow
+              key={row.label}
+              label={row.label}
+              value={row.value}
+              copyValue={row.copyValue ?? row.value}
+            />
+          ))}
+        </ul>
+      </div>
+    </Card>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  copyValue,
+}: {
+  label: string;
+  value: string;
+  copyValue: string;
+}) {
+  const [copied, setCopied] = useState(false);
+
+  const onCopy = async () => {
+    try {
+      // `navigator.clipboard.writeText` is the only modern path; the
+      // app runs inside an Electron BrowserWindow with the clipboard
+      // permission granted by default, so we don't need an execCommand
+      // fallback here.
+      await navigator.clipboard.writeText(copyValue);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // Swallow — copy is a nice-to-have, not load-bearing. Users can
+      // still read the value off the page.
+    }
+  };
+
+  return (
+    <li className="flex items-center justify-between gap-3 border-b border-hairline last:border-b-0 py-2">
+      <span className="sc-chrome text-[10px] text-ink-dim uppercase tracking-wider">
+        {label}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          void onCopy();
+        }}
+        title={`Copy ${label}`}
+        aria-label={`Copy ${label}: ${copyValue}`}
+        className="
+          group inline-flex items-center gap-2
+          font-mono text-[13px] text-ink
+          hover:text-[color:var(--sc-foliage)]
+          focus:outline-none focus:text-[color:var(--sc-foliage)]
+          transition-colors cursor-pointer
+        "
+        style={{
+          transitionDuration: "var(--sc-dur-quick)",
+          transitionTimingFunction: "var(--sc-ease-out)",
+        }}
+      >
+        <span className="sc-chrome">{value}</span>
+        {copied ? (
+          <span className="inline-flex items-center gap-1 text-[11px] text-[color:var(--sc-foliage)]">
+            <Check size={12} aria-hidden="true" />
+            copied
+          </span>
+        ) : (
+          <Copy
+            size={12}
+            aria-hidden="true"
+            className="text-ink-dim group-hover:text-[color:var(--sc-foliage)] group-focus:text-[color:var(--sc-foliage)]"
+          />
+        )}
+      </button>
+    </li>
   );
 }
 
