@@ -7,7 +7,7 @@
   "enable_file_logging": true,
   "experimental_builds": false,
   "firmware": {
-    "repo": "sunshine-systems/Teensy-Core-1.59.0",
+    "repo": "sunshine-systems/Firmware-Teensy-4.1",
     "auto_check": true,
     "loader_url": "",
     "loader_sha256": ""

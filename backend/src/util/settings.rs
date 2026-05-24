@@ -210,7 +210,7 @@ fn default_json() -> &'static str {
         "  \"enable_file_logging\": true,\n",
         "  \"experimental_builds\": false,\n",
         "  \"firmware\": {\n",
-        "    \"repo\": \"sunshine-systems/Teensy-Core-1.59.0\",\n",
+        "    \"repo\": \"sunshine-systems/Firmware-Teensy-4.1\",\n",
         "    \"auto_check\": true,\n",
         "    \"loader_url\": \"\",\n",
         "    \"loader_sha256\": \"\"\n",
