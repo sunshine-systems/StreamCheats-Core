@@ -26,7 +26,7 @@
 // "Flash tool missing — please reinstall" error and disables the
 // flash button instead of trying to fetch anything.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -40,6 +40,7 @@ import type {
   FlashResult,
 } from "../../lib/api/firmware";
 import ActionButton from "./ActionButton";
+import ProgressBar from "./ProgressBar";
 
 // Mirror the daemon's WAIT_FOR_DEVICE_TIMEOUT in seconds. Kept in
 // lockstep with `backend/src/firmware/flash.rs::WAIT_FOR_DEVICE_TIMEOUT`.
@@ -72,8 +73,24 @@ export interface FlashStepperModalProps {
    * Dispatch flash. Returns the typed FlashResult so the modal can
    * surface dispatch-time errors (loader_unavailable etc.) without a
    * round-trip to status.
+   *
+   * For release intents the modal will FIRST kick off a download via
+   * `onDownload` when the daemon doesn't already have a `Ready` hex
+   * for the target version, and only call `onConfirm` once the state
+   * machine transitions into `Ready` for that version. For manual
+   * intents (local .hex file) there's no download step — the modal
+   * calls `onConfirm` directly.
    */
   onConfirm: () => Promise<FlashResult>;
+  /**
+   * Start a download for the target release version. Only invoked
+   * for release intents whose hex isn't already `Ready` on the
+   * daemon. Returns `{ ok: true }` when the daemon accepted the
+   * download, or `{ ok: false, error }` otherwise — the modal
+   * surfaces the error inline in the Confirm step. Not required for
+   * manual intents.
+   */
+  onDownload?: (version: string) => Promise<{ ok: boolean; error?: string } | null>;
   /** Cancel the in-flight flash (POSTs /api/firmware/cancel_flash). */
   onCancel: () => Promise<void>;
 }
@@ -85,6 +102,7 @@ export default function FlashStepperModal({
   onClose,
   onRetry,
   onConfirm,
+  onDownload,
   onCancel,
 }: FlashStepperModalProps) {
   // Close on ESC. Accessibility nicety. We do NOT cancel the flash on
@@ -98,6 +116,37 @@ export default function FlashStepperModal({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  // Track when we've kicked off a download → flash chain so the
+  // post-download auto-flash only fires for THIS user gesture. Without
+  // this guard the modal would auto-flash any time the daemon happened
+  // to be in `ready` for the intent's version (e.g. user re-opens the
+  // modal on a release that's already downloaded — we want them to
+  // explicitly confirm).
+  const awaitingReadyForFlashRef = useRef(false);
+  // Reset chain state whenever the intent changes — a fresh release
+  // pick from the releases list shouldn't inherit "we just downloaded"
+  // bookkeeping from a previous attempt.
+  useEffect(() => {
+    awaitingReadyForFlashRef.current = false;
+  }, [intent]);
+
+  const kind = status?.state.kind;
+  const stateLatest = status?.state.latest;
+  // Auto-advance: when we've started a download for this version and
+  // the daemon flips to `Ready { latest: <version> }`, fire the flash
+  // automatically. The modal's step routing will then switch into the
+  // flashing screens as soon as the next status poll lands.
+  useEffect(() => {
+    if (!awaitingReadyForFlashRef.current) return;
+    if (intent.kind !== "release") return;
+    if (kind !== "ready") return;
+    // Daemon's Ready state surfaces the version under `latest` (see
+    // FirmwareState in api/firmware.ts).
+    if (stateLatest !== intent.version) return;
+    awaitingReadyForFlashRef.current = false;
+    void onConfirm();
+  }, [kind, stateLatest, intent, onConfirm]);
 
   if (!open) return null;
 
@@ -130,7 +179,14 @@ export default function FlashStepperModal({
           onClose={onClose}
           onRetry={onRetry}
           onConfirm={onConfirm}
+          onDownload={onDownload}
           onCancel={onCancel}
+          markAwaitingReady={() => {
+            awaitingReadyForFlashRef.current = true;
+          }}
+          clearAwaitingReady={() => {
+            awaitingReadyForFlashRef.current = false;
+          }}
         />
       </div>
     </div>
@@ -143,9 +199,12 @@ function StepBody(props: {
   onClose: () => void;
   onRetry: () => void;
   onConfirm: () => Promise<FlashResult>;
+  onDownload?: (version: string) => Promise<{ ok: boolean; error?: string } | null>;
   onCancel: () => Promise<void>;
+  markAwaitingReady: () => void;
+  clearAwaitingReady: () => void;
 }) {
-  const { status } = props;
+  const { status, intent } = props;
   const state = status?.state;
   const kind = state?.kind;
   const phase = state?.phase;
@@ -171,7 +230,22 @@ function StepBody(props: {
     // immediately rather than a confusing intermediate state.
     return <WaitingForDeviceStep state={state} onCancel={props.onCancel} />;
   }
+  // Downloading is only a step in the chained download → flash flow
+  // (release intents). The post-Ready auto-flash effect in the parent
+  // owns the transition into the flashing screens; this step just
+  // shows progress in the meantime.
+  if (
+    kind === "downloading" &&
+    intent.kind === "release" &&
+    (state?.latest === intent.version || state?.latest == null)
+  ) {
+    return <DownloadingStep state={state} />;
+  }
   if (kind === "failed") {
+    // A download failure during the chained flow surfaces here too —
+    // clear the "we were waiting for ready" flag so a subsequent
+    // retry doesn't auto-flash on a stale Ready transition.
+    props.clearAwaitingReady();
     return (
       <FailedStep
         state={state}
@@ -195,6 +269,8 @@ function StepBody(props: {
       status={props.status}
       onClose={props.onClose}
       onConfirm={props.onConfirm}
+      onDownload={props.onDownload}
+      markAwaitingReady={props.markAwaitingReady}
     />
   );
 }
@@ -208,11 +284,15 @@ function ConfirmStep({
   status,
   onClose,
   onConfirm,
+  onDownload,
+  markAwaitingReady,
 }: {
   intent: FlashIntent;
   status: FirmwareStatusResponse | null;
   onClose: () => void;
   onConfirm: () => Promise<FlashResult>;
+  onDownload?: (version: string) => Promise<{ ok: boolean; error?: string } | null>;
+  markAwaitingReady: () => void;
 }) {
   const loaderReady = status?.loader_ready ?? true;
   const [dispatchError, setDispatchError] = useState<string | null>(null);
@@ -225,14 +305,44 @@ function ConfirmStep({
       ? `Flash ${intent.version}?`
       : `Flash local file?`;
 
+  // True iff the daemon already has the target hex on disk for this
+  // release intent. Manual intents skip the download check entirely —
+  // they go straight to flashLocal via onConfirm.
+  const readyForIntent =
+    intent.kind === "release" &&
+    status?.state.kind === "ready" &&
+    status.state.latest === intent.version;
+
   const doConfirm = async () => {
     setDispatchError(null);
     setDispatching(true);
     try {
-      const r = await onConfirm();
-      if (!r.ok) {
-        setDispatchError(flashErrorCopy(r));
+      // Manual file or already-Ready hex: flash directly. This is the
+      // pre-existing path and the contract `onConfirm` was designed for.
+      if (intent.kind === "manual" || readyForIntent) {
+        const r = await onConfirm();
+        if (!r.ok) {
+          setDispatchError(flashErrorCopy(r));
+        }
+        return;
       }
+      // Release intent without a Ready hex: kick off the download
+      // and arm the parent's auto-flash effect. The Downloading step
+      // takes over the modal until the daemon flips to Ready, at
+      // which point the parent fires onConfirm automatically.
+      if (!onDownload) {
+        setDispatchError(
+          "Download isn't wired in this view — open this flash from /updates/firmware."
+        );
+        return;
+      }
+      markAwaitingReady();
+      const r = await onDownload(intent.version);
+      if (r && !r.ok) {
+        setDispatchError(r.error ?? "Download failed.");
+      }
+      // On success the daemon transitions to Downloading on the next
+      // status poll and StepBody routes us to the DownloadingStep.
     } finally {
       setDispatching(false);
     }
@@ -347,6 +457,61 @@ function ConfirmStep({
           Flash
         </ActionButton>
       </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Step 1b — Downloading (chained download → flash flow)
+//
+// Only reached for release intents whose hex isn't already cached on
+// the daemon. The parent watches for the daemon transitioning into
+// `Ready { latest: <our version> }` and fires the flash automatically;
+// this step is purely informational while that's in flight.
+// ---------------------------------------------------------------------------
+
+function DownloadingStep({
+  state,
+}: {
+  state:
+    | {
+        latest?: string;
+        bytes_so_far?: number;
+        total_bytes?: number | null;
+        percent?: number | null;
+      }
+    | undefined;
+}) {
+  return (
+    <>
+      <div className="flex items-start gap-3">
+        <Loader2
+          size={20}
+          strokeWidth={1.75}
+          aria-hidden="true"
+          className="shrink-0 text-foliage animate-spin"
+        />
+        <div className="flex flex-col gap-1 min-w-0 flex-1">
+          <span className="sc-chrome text-[10px] text-foliage">
+            downloading
+          </span>
+          <h2 className="text-ink text-[18px] font-medium leading-snug">
+            Downloading firmware…
+          </h2>
+        </div>
+      </div>
+      <p className="text-[12px] text-ink-muted leading-relaxed">
+        Fetching{" "}
+        <span className="font-mono text-ink">{state?.latest ?? "…"}</span>{" "}
+        from the release stream. Flashing starts automatically once the
+        download finishes.
+      </p>
+      <ProgressBar
+        percent={state?.percent ?? null}
+        bytesSoFar={state?.bytes_so_far}
+        totalBytes={state?.total_bytes ?? null}
+        label={`Downloading ${state?.latest ?? ""}`}
+      />
     </>
   );
 }
