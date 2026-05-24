@@ -23,6 +23,13 @@ export const ExperimentalStatusSchema = z.object({
   running: z.boolean(),
   // `Option<String>` in Rust serialises to `null` when absent.
   bound: z.string().nullable(),
+  // Configured listen IP + UDP port + device MAC. Always present so the
+  // Experimental UI can show external clients (e.g. kmbox-net consumers)
+  // exactly which interface, port, and device id to dial — sourced from
+  // `config.json` (`listen_addr`, `udp_port`, `device_mac`).
+  listen_ip: z.string().min(1),
+  udp_port: z.number().int().min(1).max(65535),
+  device_mac: z.string().min(1),
   last_error: z.string().nullable(),
 });
 

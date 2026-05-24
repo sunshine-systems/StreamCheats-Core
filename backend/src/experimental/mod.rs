@@ -51,6 +51,19 @@ pub struct Status {
     pub running: bool,
     /// Bound socket address when running; `None` when stopped.
     pub bound: Option<String>,
+    /// Configured listen IP (e.g. `127.0.0.1` or `0.0.0.0`). Always
+    /// present so the UI can show external clients which interface to
+    /// point at, even while the listener is stopped.
+    pub listen_ip: String,
+    /// Configured UDP port (defaults to 8888). Always present so the UI
+    /// can show external clients which port to dial, even while the
+    /// listener is stopped.
+    pub udp_port: u16,
+    /// 8-hex-char device id (e.g. `01FBC068`) that external kmbox-net
+    /// clients must stamp into every packet's `Header::mac` field —
+    /// packets with the wrong id are silently dropped by the translator.
+    /// Sourced from `config.json`'s `device_mac`.
+    pub device_mac: String,
     /// Last error from a failed start attempt. Cleared on the next
     /// successful start.
     pub last_error: Option<String>,
@@ -74,6 +87,10 @@ pub struct Manager {
     translator: Arc<Translator>,
     listen_addr: IpAddr,
     port: u16,
+    /// 8-hex-char device id, surfaced via [`Status::device_mac`] so the
+    /// Experimental UI can show external clients which MAC to stamp
+    /// into their kmbox-net packets.
+    device_mac: String,
     global_running: Arc<AtomicBool>,
     /// Where to write `config.json` updates back to. Same `cwd` the
     /// rest of the settings-persistence path uses.
@@ -90,6 +107,7 @@ impl Manager {
         translator: Arc<Translator>,
         listen_addr: IpAddr,
         port: u16,
+        device_mac: String,
         global_running: Arc<AtomicBool>,
         config_dir: PathBuf,
     ) -> Self {
@@ -112,6 +130,7 @@ impl Manager {
             translator,
             listen_addr,
             port,
+            device_mac,
             global_running,
             config_dir,
         }
@@ -150,6 +169,9 @@ impl Manager {
             enabled: g.enabled,
             running: g.listener.is_some(),
             bound: g.listener.as_ref().map(|l| l.addr().to_string()),
+            listen_ip: self.listen_addr.to_string(),
+            udp_port: self.port,
+            device_mac: self.device_mac.clone(),
             last_error: g.last_error.clone(),
         }
     }
@@ -326,6 +348,7 @@ mod tests {
             translator,
             "127.0.0.1".parse().unwrap(),
             port,
+            "01FBC068".to_string(),
             running,
             dir,
         )

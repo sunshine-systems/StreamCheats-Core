@@ -205,6 +205,9 @@ export const experimentalStatusDisabled: ExperimentalStatus =
     enabled: false,
     running: false,
     bound: null,
+    listen_ip: "127.0.0.1",
+    udp_port: 8888,
+    device_mac: "01FBC068",
     last_error: null,
   });
 
@@ -214,6 +217,9 @@ export const experimentalStatusRunning: ExperimentalStatus =
     enabled: true,
     running: true,
     bound: "127.0.0.1:14598",
+    listen_ip: "127.0.0.1",
+    udp_port: 8888,
+    device_mac: "01FBC068",
     last_error: null,
   });
 

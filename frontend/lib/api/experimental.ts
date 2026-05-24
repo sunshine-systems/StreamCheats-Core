@@ -24,6 +24,9 @@ export interface ExperimentalStatus {
   enabled: boolean;
   running: boolean;
   bound: string | null;
+  listen_ip: string;
+  udp_port: number;
+  device_mac: string;
   last_error: string | null;
 }
 
