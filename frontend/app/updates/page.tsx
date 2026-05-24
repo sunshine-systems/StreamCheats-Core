@@ -19,7 +19,14 @@
 // used by /updates/firmware — single source of truth.
 
 import { useCallback, useState } from "react";
-import { Download, RefreshCw, RotateCcw, Sparkles, Zap } from "lucide-react";
+import {
+  CheckCircle2,
+  Download,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 
 import Card from "../../components/ui/Card";
 import Eyebrow from "../../components/ui/Eyebrow";
@@ -535,15 +542,19 @@ function UpToDateCard({
 
   return (
     <Card aria-label="Up to date" static>
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex flex-col gap-1 min-w-0 flex-1">
-          <span className="text-[14px] text-ink leading-snug">
-            You&apos;re up to date.
-          </span>
-          <span className="sc-chrome text-[10px] text-ink-dim">
-            last checked · {relativeTime(lastChecked)}
-          </span>
-        </div>
+      <div className="flex flex-col items-center text-center gap-4 py-8 sm:py-10 px-4">
+        <CheckCircle2
+          size={56}
+          strokeWidth={1.5}
+          aria-hidden="true"
+          className="text-foliage"
+        />
+        <h2 className="sc-display text-ink font-medium leading-[1.1] text-2xl sm:text-3xl">
+          You&apos;re up to date
+        </h2>
+        <p className="sc-chrome text-[11px] text-ink-dim">
+          Last checked {relativeTime(lastChecked)}
+        </p>
         <ActionButton
           tone="ghost"
           onClick={onCheck}
