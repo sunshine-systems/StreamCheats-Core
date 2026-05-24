@@ -127,8 +127,8 @@ describe("firmware contract", () => {
       board: null,
       auto_check: true,
       experimental_builds: false,
-      // SC-14: loader_ready is required — drift signal for the pre-
-      // flight loader-download UX.
+      // loader_ready is required — drift signal for the bundled
+      // teensy_loader_cli pre-flight check.
       loader_ready: false,
     });
     expect(parsed.installed_version).toBeNull();

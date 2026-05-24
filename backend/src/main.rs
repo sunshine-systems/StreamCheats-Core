@@ -739,8 +739,6 @@ fn run(
         settings.experimental_builds,
         last_heartbeat.clone(),
         settings.data_dir.clone(),
-        settings.firmware.loader_url.clone(),
-        settings.firmware.loader_sha256.clone(),
     ));
     let http_state_template = http::state::AppState {
         device: device.clone(),

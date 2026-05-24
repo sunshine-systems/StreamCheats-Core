@@ -45,20 +45,6 @@ export const defaultHandlers = [
   http.post(`${BASE}/api/firmware/cancel_flash`, () =>
     HttpResponse.json({ ok: true }, { status: 202 })
   ),
-  // SC-14: ensure_loader defaults to "ready" so the bulk of UI tests
-  // can keep treating the loader as a non-event. Tests that exercise
-  // the missing / failed paths override this with server.use().
-  http.post(`${BASE}/api/firmware/ensure_loader`, () =>
-    HttpResponse.json(
-      {
-        ready: true,
-        path: "C:\\Users\\J\\AppData\\Local\\StreamCheats Core\\bin\\teensy_loader_cli.exe",
-        sha256_verified: true,
-      },
-      { status: 200 }
-    )
-  ),
-
   // Experimental
   http.get(`${BASE}/api/experimental/registry`, () =>
     HttpResponse.json(experimentalRegistry)

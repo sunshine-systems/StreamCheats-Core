@@ -50,6 +50,10 @@
         "to": "config.json"
       },
       {
+        "from": "../backend/vendor/teensy_loader_cli.exe",
+        "to": "teensy_loader_cli.exe"
+      },
+      {
         "from": "../frontend/out",
         "to": "frontend"
       }

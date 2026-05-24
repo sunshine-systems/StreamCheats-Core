@@ -8,8 +8,6 @@
   "experimental_builds": false,
   "firmware": {
     "repo": "sunshine-systems/Firmware-Teensy-4.1",
-    "auto_check": true,
-    "loader_url": "",
-    "loader_sha256": ""
+    "auto_check": true
   }
 }

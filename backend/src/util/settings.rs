@@ -94,20 +94,6 @@ pub struct RawFirmwareSettings {
     /// still works. Defaults to `true`.
     #[serde(default)]
     pub auto_check: Option<bool>,
-    /// SC-14: URL to download a Windows build of `teensy_loader_cli`
-    /// from on first flash. Empty means "not configured" — the daemon
-    /// returns `loader_url_not_configured` from
-    /// `POST /api/firmware/ensure_loader` until a maintainer hosts a
-    /// binary and sets this field. See the SC-14 PR body for the
-    /// maintainer action required.
-    #[serde(default)]
-    pub loader_url: Option<String>,
-    /// SC-14: SHA-256 (hex, lowercase) of the file at `loader_url`.
-    /// Verified during download; on mismatch the partial download is
-    /// deleted. Empty means "skip verification" and emits a warning
-    /// to the log — strongly discouraged for production use.
-    #[serde(default)]
-    pub loader_sha256: Option<String>,
 }
 
 /// Validated runtime configuration. Produced by [`load_or_create`] on a
@@ -180,12 +166,6 @@ impl Default for ExperimentalApiSettings {
 pub struct FirmwareSettings {
     pub repo: String,
     pub auto_check: bool,
-    /// SC-14: Windows build URL for `teensy_loader_cli`. Empty until a
-    /// maintainer hosts a binary.
-    pub loader_url: String,
-    /// SC-14: SHA-256 of the binary at `loader_url`. Empty disables
-    /// verification (with a warning).
-    pub loader_sha256: String,
 }
 
 impl Default for FirmwareSettings {
@@ -193,8 +173,6 @@ impl Default for FirmwareSettings {
         Self {
             repo: crate::firmware::DEFAULT_REPO.to_string(),
             auto_check: true,
-            loader_url: String::new(),
-            loader_sha256: String::new(),
         }
     }
 }
@@ -211,9 +189,7 @@ fn default_json() -> &'static str {
         "  \"experimental_builds\": false,\n",
         "  \"firmware\": {\n",
         "    \"repo\": \"sunshine-systems/Firmware-Teensy-4.1\",\n",
-        "    \"auto_check\": true,\n",
-        "    \"loader_url\": \"\",\n",
-        "    \"loader_sha256\": \"\"\n",
+        "    \"auto_check\": true\n",
         "  },\n",
         "  \"experimental_api\": {\n",
         "    \"enabled\": false,\n",
@@ -334,18 +310,6 @@ fn resolve_firmware(raw: Option<RawFirmwareSettings>) -> Result<FirmwareSettings
     Ok(FirmwareSettings {
         repo,
         auto_check: raw.auto_check.unwrap_or(true),
-        loader_url: raw
-            .loader_url
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string(),
-        loader_sha256: raw
-            .loader_sha256
-            .as_deref()
-            .map(str::trim)
-            .unwrap_or("")
-            .to_string(),
     })
 }
 

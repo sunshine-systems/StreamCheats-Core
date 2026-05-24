@@ -41,7 +41,6 @@ import { useFirmwareStatus } from "../../../lib/hooks/useFirmwareStatus";
 import { useUpdater } from "../../../lib/hooks/useUpdater";
 import {
   cancelFlash,
-  ensureLoader,
   flash,
   flashLocal,
   pickHexFile,
@@ -311,11 +310,6 @@ export default function InstallFirmwarePage() {
           onRetry={() => setModalOpen(true)}
           onConfirm={onConfirm}
           onCancel={onCancelFlash}
-          onEnsureLoader={async () => {
-            const r = await ensureLoader();
-            if (r.ready) await refresh();
-            return r;
-          }}
         />
       ) : null}
     </div>
