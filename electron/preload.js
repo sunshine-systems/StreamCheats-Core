@@ -59,4 +59,17 @@ contextBridge.exposeInMainWorld('streamcheats', {
    * Never throws.
    */
   pickHexFile: () => ipcRenderer.invoke('pick-hex-file:run'),
+
+  /**
+   * Open (or focus, if already open) the dedicated Logs window. The
+   * Logs sidebar item invokes this instead of navigating in-shell so
+   * the log firehose gets a wider, freely-resizable canvas separate
+   * from the narrow main window.
+   *
+   * Resolves to:
+   *   { ok: true }
+   *   { ok: false, error?: string }
+   * Never throws.
+   */
+  openLogsWindow: () => ipcRenderer.invoke('logs-window:open'),
 });
