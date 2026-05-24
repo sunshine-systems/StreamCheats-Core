@@ -10,6 +10,19 @@ use serde::{Deserialize, Serialize};
 
 /// Filename of the persisted config, looked up in the process's current
 /// working directory.
+///
+/// PERSISTENCE CONTRACT (read this before changing the cwd policy):
+/// The daemon resolves `config.json` from its cwd at startup and writes
+/// to the same path on every `set_experimental_builds` call. The
+/// Electron shell (see `electron/main.js`) is responsible for spawning
+/// the daemon with cwd = `app.getPath('userData')` (i.e.
+/// `%APPDATA%\StreamCheats Core\` on Windows) so the file lives OUTSIDE
+/// the NSIS install dir. This matters because every `Setup.exe`
+/// upgrade overwrites the install dir — if config.json lived under
+/// `process.resourcesPath` the user's `experimental_builds` toggle (and
+/// any other persisted field) would be wiped on every upgrade. Keep
+/// the cwd contract in sync if you ever revisit the daemon launch
+/// path.
 pub const CONFIG_FILENAME: &str = "config.json";
 /// UDP port used when `config.json` omits `udp_port`. Matches the vendor
 /// SDK's default of 8888.

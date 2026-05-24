@@ -162,17 +162,53 @@ app.whenReady().then(async () => {
   // status text and tears it down when the main window is ready.
   splash.createSplash({ icon: APP_ICON });
 
-  // In packaged mode the binary AND the bundled config.json both live
-  // under process.resourcesPath, so spawn the daemon there explicitly
-  // (its cwd determines where it looks for config.json). In dev, leaving
-  // cwd undefined lets backend-process.js default to the binary's dir,
-  // which for `cargo build` lives under backend/target/release — that
-  // dir has no config.json, but during dev we usually run the daemon
-  // out-of-band anyway, and the existing-PID gate keeps us out of the
-  // way when it's already running.
-  const backendCwd = IS_PACKAGED
-    ? process.resourcesPath
-    : path.join(PROJECT_ROOT, 'backend');
+  // PERSISTENCE: In packaged mode the daemon's cwd determines where it
+  // reads/writes `config.json`. We deliberately point it at
+  // `app.getPath('userData')` (= `%APPDATA%\StreamCheats Core\` on
+  // Windows) rather than `process.resourcesPath` because the install
+  // dir gets cleaned/overwritten on every NSIS upgrade — anything
+  // stored there (including the user's `experimental_builds` toggle)
+  // would be wiped on each `Setup.exe` reinstall. userData lives
+  // outside the install dir and is preserved across upgrades and even
+  // across uninstalls (electron/package.json sets
+  // `nsis.deleteAppDataOnUninstall: false`).
+  //
+  // On first run there is no config.json in userData yet, so we seed
+  // one from the bundled `extraResources` copy under
+  // `process.resourcesPath`. On subsequent runs (and after upgrades)
+  // we leave the existing userData file untouched so the user's
+  // settings persist.
+  //
+  // In dev, leaving cwd as `backend/` lets the daemon find the
+  // checked-in `backend/config.json`.
+  let backendCwd;
+  if (IS_PACKAGED) {
+    backendCwd = app.getPath('userData');
+    try {
+      fs.mkdirSync(backendCwd, { recursive: true });
+      const userConfig = path.join(backendCwd, 'config.json');
+      if (!fs.existsSync(userConfig)) {
+        const seedConfig = path.join(process.resourcesPath, 'config.json');
+        if (fs.existsSync(seedConfig)) {
+          fs.copyFileSync(seedConfig, userConfig);
+          logger.info(
+            `[main] seeded config.json into userData from ${seedConfig}`
+          );
+        } else {
+          logger.warn(
+            `[main] no bundled config.json at ${seedConfig} to seed; ` +
+              'daemon will write its own default into userData on first run.'
+          );
+        }
+      } else {
+        logger.info(`[main] reusing existing userData config: ${userConfig}`);
+      }
+    } catch (err) {
+      logger.warn(`[main] could not seed userData config: ${err.message}`);
+    }
+  } else {
+    backendCwd = path.join(PROJECT_ROOT, 'backend');
+  }
 
   // Pick the frontend dir we'll point the daemon at. In packaged
   // mode this is unconditional (electron-builder always ships it in

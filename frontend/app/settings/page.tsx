@@ -1,9 +1,11 @@
 "use client";
 
 // Settings page — the live home for the existing nightly-channel
-// toggle + "Check for updates now" affordance, re-wrapped in the new
-// design tokens per SC-6. SC-12+ may grow the surface; for v1 of the
-// redesign this is the only interactive control.
+// toggle, re-wrapped in the new design tokens per SC-6. The explicit
+// "Check for updates now" affordance lives on the Update Center
+// ("Check again") instead; toggling the channel here re-runs an
+// update check automatically so the status line reflects the new
+// channel without an extra click.
 
 import { useUpdater } from "../../lib/hooks/useUpdater";
 import Card from "../../components/ui/Card";
@@ -64,33 +66,21 @@ export default function SettingsPage() {
               type="checkbox"
               checked={u.experimental}
               disabled={u.busy}
-              onChange={(e) => u.setNightly(e.target.checked)}
+              onChange={async (e) => {
+                // Toggle the channel, then re-run an update check so
+                // the status line above reflects what's available on
+                // the newly-selected channel (nightly users want to
+                // see the latest pre-release surface immediately, and
+                // users opting back out want any stale nightly
+                // notification to clear). The Update Center owns the
+                // explicit "Check again" button for manual re-checks.
+                await u.setNightly(e.target.checked);
+                await u.runCheck();
+              }}
               className="accent-[var(--sc-foliage)]"
             />
             Receive nightly / experimental builds
           </label>
-
-          <div>
-            <button
-              type="button"
-              onClick={u.runCheck}
-              disabled={u.busy}
-              className={`
-                font-mono text-[12px] tracking-wide uppercase
-                px-3 py-2 rounded-[4px]
-                border border-hairline-2 bg-substrate-2 text-ink
-                transition-colors
-                hover:border-foliage hover:text-foliage
-                disabled:opacity-60 disabled:cursor-wait
-              `}
-              style={{
-                transitionDuration: "var(--sc-dur-quick)",
-                transitionTimingFunction: "var(--sc-ease-out)",
-              }}
-            >
-              {u.busy ? "Working…" : "Check for updates now"}
-            </button>
-          </div>
         </div>
       </Card>
     </div>
