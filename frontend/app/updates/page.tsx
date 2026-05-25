@@ -281,7 +281,7 @@ function UpdateRowFrame({
   installed: string;
   latest?: string | null;
   channel?: string | null;
-  kindChip: { tone: StateChipTone; label: string };
+  kindChip: { tone: StateChipTone; label: string } | null;
   actions: React.ReactNode;
   body?: React.ReactNode;
   first: boolean;
@@ -298,7 +298,9 @@ function UpdateRowFrame({
             <span className="sc-chrome text-[10px] text-ink-dim">
               {typeLabel}
             </span>
-            <StateChip tone={kindChip.tone}>{kindChip.label}</StateChip>
+            {kindChip ? (
+              <StateChip tone={kindChip.tone}>{kindChip.label}</StateChip>
+            ) : null}
           </div>
           <span className="font-mono text-ink text-[16px] leading-tight mt-1 break-all">
             {installed}
@@ -335,7 +337,10 @@ function SoftwareRow({
   first?: boolean;
 }) {
   const kind = state.kind;
-  const chip = chipForKind(kind, true);
+  // Hide the redundant "Ready to install" chip when the Install button
+  // is already obviously the next step. Other states still surface the
+  // chip since it adds information the action alone doesn't convey.
+  const chip = kind === "ready" ? null : chipForKind(kind, true);
   const installed = `v${state.installed ?? "—"}`;
   const showLatest = kind === "available" || kind === "ready";
   const actions = (
