@@ -134,8 +134,8 @@ pub fn build_bundle(state: &AppState) -> Result<Bundle, BugReportError> {
     let entry_count = entries.len();
     let bytes = zip_builder::build(&entries)?;
     let filename = format!(
-        "streamcheats_bug_report_{}.zip",
-        now_local.format("%Y-%m-%d_%H%M")
+        "StreamCheats Core Bug Report {}.zip",
+        now_local.format("%Y-%m-%d %H%M")
     );
     Ok(Bundle {
         bytes,
@@ -263,7 +263,7 @@ mod tests {
         ));
         let state = make_state(true, dir);
         let bundle = build_bundle(&state).expect("bundle ok");
-        assert!(bundle.filename.starts_with("streamcheats_bug_report_"));
+        assert!(bundle.filename.starts_with("StreamCheats Core Bug Report "));
         assert!(bundle.filename.ends_with(".zip"));
         let mut zr = ZipArchive::new(Cursor::new(bundle.bytes)).unwrap();
         let names: Vec<String> = (0..zr.len())
