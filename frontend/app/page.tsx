@@ -6,7 +6,9 @@
 //   1. Software update banner (only when an update is pending)
 //   2. Connected Devices section (Mouse + Keyboard cards)
 //   3. Unseen warnings / errors card (soft 0-state)
-//   4. Bug report card (generate a diagnostic bundle)
+//   4. Update status card (persistent quiet companion to the banner)
+//
+// (The bug report action moved to the global sidebar.)
 //
 // Stripped header (v2): no H1 / lede paragraph — the eyebrow + version
 // chip alone do the job. Three real cards below carry the content.
@@ -20,7 +22,7 @@ import Eyebrow from "../components/ui/Eyebrow";
 import DevicesSection from "../components/home/DevicesSection";
 import UpdatePendingBanner from "../components/home/UpdatePendingBanner";
 import UnseenLogCard from "../components/home/UnseenLogCard";
-import BugReportCard from "../components/home/BugReportCard";
+import UpdateStatusCard from "../components/home/UpdateStatusCard";
 import { useHealthDetail } from "../lib/hooks/useHealthDetail";
 import pkg from "../package.json";
 
@@ -43,7 +45,7 @@ export default function HomePage() {
       <UpdatePendingBanner />
       <DevicesSection />
       <UnseenLogCard />
-      <BugReportCard />
+      <UpdateStatusCard />
     </div>
   );
 }
