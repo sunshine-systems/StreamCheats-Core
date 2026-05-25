@@ -11,8 +11,9 @@
 //   3. Image                        — `/teensy-4.1.jpg`
 //   4. Configure action             — encodes state via its label:
 //        * Mouse detected   — "Configure →" (foliage link)
-//        * Mouse undetected — "Not detected" (disabled button)
+//        * Mouse undetected — "Not connected" (disabled button)
 //        * Keyboard         — "Coming soon" (disabled button)
+//      All actions are full-width within the card's content area.
 //
 // The previous top-right status chip ("Detecting…" / "Connected" /
 // "Not detected for Xm Ys") was removed — the bottom action already
@@ -103,8 +104,8 @@ function DeviceCardChrome({
 // a real disabled <button> when not — both look identical apart from
 // the muted ink and not-allowed cursor.
 const ACTION_BASE_CLASS = `
-  self-start
-  inline-flex items-center gap-1
+  w-full
+  inline-flex items-center justify-center gap-1
   px-2 py-1
   border rounded-[3px]
   sc-chrome text-[10px]
@@ -160,7 +161,7 @@ function MouseCard({ detected }: { detected: boolean }) {
   const action = detected ? (
     <ConfigureAction href={configureHref} ariaLabel="Configure mouse" />
   ) : (
-    <DisabledAction label="Not detected" ariaLabel="Mouse not detected" />
+    <DisabledAction label="Not connected" ariaLabel="Mouse not connected" />
   );
 
   return (
