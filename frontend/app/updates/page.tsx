@@ -22,9 +22,9 @@ import { useCallback, useState } from "react";
 import {
   CheckCircle2,
   Download,
+  Power,
   RefreshCw,
   RotateCcw,
-  Sparkles,
   Zap,
 } from "lucide-react";
 
@@ -268,55 +268,50 @@ function UpdatesAvailableCard({
 // ---------------------------------------------------------------------------
 
 function UpdateRowFrame({
-  typeLabel,
-  installed,
-  latest,
+  headline,
+  version,
   channel,
-  kindChip,
-  actions,
+  chip,
   body,
+  action,
   first,
 }: {
-  typeLabel: string;
-  installed: string;
-  latest?: string | null;
+  headline: string;
+  version: string;
   channel?: string | null;
-  kindChip: { tone: StateChipTone; label: string } | null;
-  actions: React.ReactNode;
+  chip?: { tone: StateChipTone; label: string } | null;
   body?: React.ReactNode;
+  action?: React.ReactNode;
   first: boolean;
 }) {
   return (
     <li
-      className={`flex flex-col gap-2 py-3 ${
+      className={`flex flex-col gap-3 py-4 ${
         first ? "" : "border-t border-hairline"
       }`}
     >
-      <div className="flex items-start gap-4 flex-wrap">
-        <div className="flex flex-col min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span className="sc-chrome text-[10px] text-ink-dim">
-              {typeLabel}
-            </span>
-            {kindChip ? (
-              <StateChip tone={kindChip.tone}>{kindChip.label}</StateChip>
-            ) : null}
-          </div>
-          <span className="font-mono text-ink text-[16px] leading-tight mt-1 break-all">
-            {installed}
+      <div className="flex flex-col gap-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="sc-display text-ink text-[16px] leading-tight font-medium">
+            {headline}
           </span>
-          {latest ? (
-            <span className="sc-chrome text-[10px] text-copper mt-1">
-              latest · {latest}
-              {channel ? ` · ${channel}` : ""}
+          {chip ? (
+            <StateChip tone={chip.tone}>{chip.label}</StateChip>
+          ) : null}
+        </div>
+        <div className="flex items-baseline gap-2 min-w-0 flex-wrap">
+          <span className="font-mono text-ink-muted text-[12px] break-all">
+            {version}
+          </span>
+          {channel ? (
+            <span className="sc-chrome text-[10px] text-ink-dim">
+              · {channel}
             </span>
           ) : null}
         </div>
-        <div className="flex flex-col items-stretch gap-2 shrink-0">
-          {actions}
-        </div>
       </div>
       {body}
+      {action}
     </li>
   );
 }
@@ -337,45 +332,56 @@ function SoftwareRow({
   first?: boolean;
 }) {
   const kind = state.kind;
-  // Hide the redundant "Ready to install" chip when the Install button
-  // is already obviously the next step. Other states still surface the
-  // chip since it adds information the action alone doesn't convey.
-  const chip = kind === "ready" ? null : chipForKind(kind, true);
-  const installed = `v${state.installed ?? "—"}`;
-  const showLatest = kind === "available" || kind === "ready";
-  const actions = (
-    <>
-      {kind === "available" ? (
-        <ActionButton tone="foliage" onClick={onDownload} disabled={busy}>
-          <Download size={12} strokeWidth={1.75} aria-hidden="true" />
-          Download
-        </ActionButton>
-      ) : null}
-      {kind === "ready" ? (
-        <ActionButton tone="copper" onClick={onInstall} disabled={busy}>
-          <Sparkles size={12} strokeWidth={1.75} aria-hidden="true" />
-          Install &amp; restart
-        </ActionButton>
-      ) : null}
-      {kind === "failed" ? (
-        <ActionButton tone="ghost" onClick={onCheck} disabled={busy}>
-          <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
-          Try again
-        </ActionButton>
-      ) : null}
-    </>
-  );
+  // Show the latest actionable version, falling back to installed when
+  // nothing newer has been advertised yet. Drops the noisy
+  // "v— / latest · vX.Y.Z" double-line of the old design.
+  const versionStr = `v${state.latest ?? state.installed ?? "—"}`;
+  // Chip only conveys info the action doesn't already (downloading
+  // progress lives in the body; ready/available are obvious from the
+  // button). Surface failure as a chip so the row still reads at a
+  // glance even before the user scans for the error text.
+  const chip = kind === "failed" ? chipForKind(kind, true) : null;
+  const action =
+    kind === "available" ? (
+      <ActionButton
+        tone="foliage"
+        onClick={onDownload}
+        disabled={busy}
+        className="w-full justify-center"
+      >
+        <Download size={14} strokeWidth={1.75} aria-hidden="true" />
+        Download
+      </ActionButton>
+    ) : kind === "ready" ? (
+      <ActionButton
+        tone="copper"
+        onClick={onInstall}
+        disabled={busy}
+        className="w-full justify-center"
+      >
+        <Power size={14} strokeWidth={1.75} aria-hidden="true" />
+        Install &amp; restart
+      </ActionButton>
+    ) : kind === "failed" ? (
+      <ActionButton
+        tone="ghost"
+        onClick={onCheck}
+        disabled={busy}
+        className="w-full justify-center"
+      >
+        <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
+        Try again
+      </ActionButton>
+    ) : null;
   const body = (
     <>
       {kind === "downloading" ? (
-        <div className="mt-1">
-          <ProgressBar
-            percent={state.percent ?? null}
-            bytesSoFar={state.bytes_so_far}
-            totalBytes={state.total_bytes ?? null}
-            label={`Downloading v${state.latest ?? "—"}`}
-          />
-        </div>
+        <ProgressBar
+          percent={state.percent ?? null}
+          bytesSoFar={state.bytes_so_far}
+          totalBytes={state.total_bytes ?? null}
+          label={`Downloading v${state.latest ?? "—"}`}
+        />
       ) : null}
       {kind === "available" && state.notes_url ? (
         <p className="text-[12px] text-ink-dim">
@@ -401,12 +407,11 @@ function SoftwareRow({
   );
   return (
     <UpdateRowFrame
-      typeLabel="software"
-      installed={installed}
-      latest={showLatest ? `v${state.latest}` : null}
-      channel={showLatest ? state.channel : null}
-      kindChip={chip}
-      actions={actions}
+      headline="Software update"
+      version={versionStr}
+      channel={state.channel ?? null}
+      chip={chip}
+      action={action}
       body={body}
       first={first}
     />
@@ -432,59 +437,74 @@ function FirmwareRow({
 }) {
   const state = status.state;
   const kind = state.kind;
-  const chip = chipForKind(kind, false);
-  const installed = status.installed_version ?? "—";
   const flashing = kind === "flashing";
-  const showLatest = kind === "available" || kind === "ready";
-  const latestStr = flashing
-    ? state.version ?? null
-    : showLatest
-      ? state.latest
-      : null;
-  const channelStr = showLatest ? state.channel : flashing ? "flashing" : null;
-  const actions = (
-    <>
-      {kind === "available" ? (
-        <ActionButton
-          tone="foliage"
-          onClick={() => state.latest && onDownload(state.latest)}
-          disabled={busy}
-        >
-          <Download size={12} strokeWidth={1.75} aria-hidden="true" />
-          Download
-        </ActionButton>
-      ) : null}
-      {kind === "ready" ? (
-        <ActionButton tone="copper" onClick={onFlash} disabled={busy}>
-          <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-          Flash
-        </ActionButton>
-      ) : null}
-      {flashing ? (
-        <ActionButton tone="copper" onClick={onReopenModal}>
-          <Zap size={12} strokeWidth={1.75} aria-hidden="true" />
-          View progress
-        </ActionButton>
-      ) : null}
-      {kind === "failed" ? (
-        <ActionButton tone="ghost" onClick={onCheck} disabled={busy}>
-          <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
-          Try again
-        </ActionButton>
-      ) : null}
-    </>
-  );
+  // Pick the version we're actively talking about: the new version if
+  // there is one, otherwise what's installed.
+  const versionStr = flashing
+    ? state.version ?? status.installed_version ?? "—"
+    : kind === "available" || kind === "ready" || kind === "downloading"
+      ? state.latest ?? status.installed_version ?? "—"
+      : status.installed_version ?? "—";
+  const channelStr =
+    (kind === "available" || kind === "ready") && "channel" in state
+      ? state.channel
+      : flashing
+        ? "flashing"
+        : null;
+  // Failure chip and flashing chip read at a glance; other states are
+  // either obvious from the button (available/ready) or carry their
+  // own body (downloading progress bar).
+  const chip =
+    kind === "failed" || flashing ? chipForKind(kind, false) : null;
+  const action = flashing ? (
+    <ActionButton
+      tone="copper"
+      onClick={onReopenModal}
+      className="w-full justify-center"
+    >
+      <Zap size={14} strokeWidth={1.75} aria-hidden="true" />
+      View progress
+    </ActionButton>
+  ) : kind === "available" ? (
+    <ActionButton
+      tone="foliage"
+      onClick={() => state.latest && onDownload(state.latest)}
+      disabled={busy}
+      className="w-full justify-center"
+    >
+      <Download size={14} strokeWidth={1.75} aria-hidden="true" />
+      Download
+    </ActionButton>
+  ) : kind === "ready" ? (
+    <ActionButton
+      tone="copper"
+      onClick={onFlash}
+      disabled={busy}
+      className="w-full justify-center"
+    >
+      <Zap size={14} strokeWidth={1.75} aria-hidden="true" />
+      Flash
+    </ActionButton>
+  ) : kind === "failed" ? (
+    <ActionButton
+      tone="ghost"
+      onClick={onCheck}
+      disabled={busy}
+      className="w-full justify-center"
+    >
+      <RotateCcw size={14} strokeWidth={1.75} aria-hidden="true" />
+      Try again
+    </ActionButton>
+  ) : null;
   const body = (
     <>
       {kind === "downloading" ? (
-        <div className="mt-1">
-          <ProgressBar
-            percent={state.percent ?? null}
-            bytesSoFar={state.bytes_so_far}
-            totalBytes={state.total_bytes ?? null}
-            label={`Downloading ${state.latest ?? ""}`}
-          />
-        </div>
+        <ProgressBar
+          percent={state.percent ?? null}
+          bytesSoFar={state.bytes_so_far}
+          totalBytes={state.total_bytes ?? null}
+          label={`Downloading ${state.latest ?? ""}`}
+        />
       ) : null}
       {kind === "available" && state.notes_url ? (
         <p className="text-[12px] text-ink-dim">
@@ -510,12 +530,11 @@ function FirmwareRow({
   );
   return (
     <UpdateRowFrame
-      typeLabel="firmware"
-      installed={installed}
-      latest={latestStr}
+      headline="Firmware update"
+      version={versionStr}
       channel={channelStr}
-      kindChip={chip}
-      actions={actions}
+      chip={chip}
+      action={action}
       body={body}
       first={first}
     />
