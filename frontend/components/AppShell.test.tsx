@@ -1,6 +1,6 @@
-// Smoke test for the sidebar shell. Asserts all 7 routes are
-// represented + the Settings item is positioned visually after a
-// separator (per SC-5's sidebar spec).
+// Smoke test for the sidebar shell. Asserts all 7 routes plus the
+// Bug Report action item are represented, and the Settings item is
+// positioned visually after a separator (per SC-5's sidebar spec).
 
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,7 +16,7 @@ vi.mock("next/navigation", () => ({
 }));
 
 describe("AppShell sidebar", () => {
-  it("renders all seven sidebar routes by aria-label", () => {
+  it("renders all sidebar items by aria-label (routes + actions)", () => {
     render(
       <AppShell>
         <div>child</div>
@@ -29,10 +29,39 @@ describe("AppShell sidebar", () => {
       "Experimental Support",
       "Updates",
       "Logs",
+      "Report a bug",
       "Settings",
     ]) {
       expect(screen.getByLabelText(label)).toBeInTheDocument();
     }
+  });
+
+  it("renders the Report a bug item as a button (no aria-current)", () => {
+    render(
+      <AppShell>
+        <div>child</div>
+      </AppShell>
+    );
+    const bug = screen.getByLabelText("Report a bug");
+    expect(bug.tagName).toBe("BUTTON");
+    expect(bug).not.toHaveAttribute("aria-current");
+  });
+
+  it("opens the bug report modal when the sidebar item is clicked", async () => {
+    render(
+      <AppShell>
+        <div>child</div>
+      </AppShell>
+    );
+    // Modal is closed by default — no dialog in the tree.
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText("Report a bug"));
+    const dialog = screen.getByRole("dialog");
+    expect(dialog).toBeInTheDocument();
+    // Initial idle screen shows the primary CTA.
+    expect(
+      screen.getByRole("button", { name: /create bug report/i })
+    ).toBeInTheDocument();
   });
 
   it("marks the current route with aria-current=page", () => {

@@ -15,6 +15,7 @@
 
 import { usePathname } from "next/navigation";
 import {
+  Bug,
   Download,
   FlaskConical,
   Home,
@@ -24,13 +25,14 @@ import {
   Terminal,
   type LucideIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { getBridge } from "../lib/api/client";
 import { useAnyUpdatePending } from "../lib/hooks/useAnyUpdatePending";
 import { useExperimentalActive } from "../lib/hooks/useExperimentalStatus";
 import { useFirmwareStatus } from "../lib/hooks/useFirmwareStatus";
 import { type AppRoute, normalizeRoute, relativeHref } from "../lib/route/href";
+import BugReportModal from "./BugReportModal";
 
 // Sidebar entries are either navigation targets (rendered as <a> with
 // relative hrefs) or actions (rendered as <button> that fire an
@@ -77,6 +79,16 @@ const TOP_ITEMS: NavItem[] = [
   { kind: "action", id: "logs", label: "Logs", Icon: Terminal },
 ];
 
+// Bug report sits just above the separator-then-Settings block at the
+// bottom of the rail. It's an action (opens an in-app modal), not a
+// route — same shape as the Logs action above.
+const BUG_REPORT_ITEM: NavActionItem = {
+  kind: "action",
+  id: "bug-report",
+  label: "Report a bug",
+  Icon: Bug,
+};
+
 const BOTTOM_ITEM: NavLinkItem = {
   kind: "link",
   route: "/settings",
@@ -108,6 +120,11 @@ export default function AppShell({ children }: AppShellProps) {
   // rather than overload `pending` — same colour, different intensity.
   const firmwareFlashing =
     useFirmwareStatus().status?.state.kind === "flashing";
+
+  // Local open flag for the bug-report modal. The modal itself owns
+  // the useBugReport hook + visible state machine — AppShell just
+  // toggles visibility.
+  const [bugReportOpen, setBugReportOpen] = useState(false);
 
   // The dedicated Logs BrowserWindow loads `/logs/window/` — a
   // full-viewport renderer of <LogStream /> with no shell chrome. We
@@ -164,6 +181,21 @@ export default function AppShell({ children }: AppShellProps) {
 
         <div className="flex-1" aria-hidden="true" />
 
+        {/* Bug Report sits just above the separator + Settings — it's
+            a sidebar-level concern (always reachable), not a per-page
+            feature, so it lives in the bottom group like Settings but
+            without an active-route indicator. */}
+        <nav>
+          <SidebarItem
+            item={BUG_REPORT_ITEM}
+            active={false}
+            pathname={pathname}
+            pending={false}
+            flashing={false}
+            onAction={() => setBugReportOpen(true)}
+          />
+        </nav>
+
         <div
           aria-hidden="true"
           className="mx-2 mb-1 h-px bg-hairline"
@@ -182,6 +214,11 @@ export default function AppShell({ children }: AppShellProps) {
       <main className="flex-1 min-w-0 relative h-dvh overflow-y-auto">
         {children}
       </main>
+
+      <BugReportModal
+        open={bugReportOpen}
+        onClose={() => setBugReportOpen(false)}
+      />
     </div>
   );
 }
@@ -192,6 +229,7 @@ function SidebarItem({
   pathname,
   pending,
   flashing,
+  onAction,
 }: {
   item: NavItem;
   active: boolean;
@@ -209,6 +247,13 @@ function SidebarItem({
    * mid-flash and clicking will re-open the stepper modal.
    */
   flashing: boolean;
+  /**
+   * Optional click handler for action items. If supplied, takes
+   * precedence over the built-in `openLogsWindow` fallback — this is
+   * how the bug-report item opens its modal without needing a
+   * dedicated render path.
+   */
+  onAction?: () => void;
 }) {
   const { Icon, label } = item;
 
@@ -324,12 +369,16 @@ function SidebarItem({
   );
 
   if (item.kind === "action") {
-    // The Logs item: call into the Electron main process to spawn (or
-    // focus) the dedicated logs window. Bridge-absent fallback
-    // (browser dev with no Electron) navigates to the static
-    // /logs/window/ page in the same window — strictly a dev-aid,
-    // production always has the bridge.
+    // Action items either fire a caller-supplied handler (preferred —
+    // see the bug-report item which toggles an in-shell modal) or
+    // fall back to the legacy Logs behaviour: pop a dedicated
+    // BrowserWindow via the Electron bridge, with a same-window URL
+    // assign as the bridge-absent dev fallback.
     const handleClick = async () => {
+      if (onAction) {
+        onAction();
+        return;
+      }
       const bridge = getBridge();
       if (bridge && typeof bridge.openLogsWindow === "function") {
         try {
