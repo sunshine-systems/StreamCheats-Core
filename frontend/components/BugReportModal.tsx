@@ -253,11 +253,14 @@ function IdleView({
   return (
     <div className="flex flex-col gap-4">
       <Heading>Report a bug</Heading>
+      <ul className="sc-chrome text-[11px] text-ink-muted m-0 leading-relaxed list-disc pl-5 flex flex-col gap-1">
+        <li>Last 5 minutes of logs</li>
+        <li>Current configuration settings</li>
+        <li>No personal data</li>
+      </ul>
       <Body>
-        A zip containing the last 5 minutes of logs, a snapshot of your
-        config (secrets redacted), and basic system info will be saved
-        to your Desktop. No personal data, no automatic send — share
-        the file in Discord or on a GitHub issue when reporting.
+        A zip file containing the data will be created on your desktop
+        to provide to the support team.
       </Body>
       <ButtonRow>
         <SecondaryButton onClick={onCancel}>Cancel</SecondaryButton>
