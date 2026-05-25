@@ -6,10 +6,17 @@
 // `downloading`, or `ready`. For every other state we render nothing
 // — the Home page should stay quiet when there's no action to take.
 //
-// Visual per SC-7: copper-accented (copper left border + copper
-// download icon). Tap target routes the user to /updates rather than
-// triggering the download inline; the Updates page owns the full
-// install flow.
+// Visual: standard panel chrome (bg-panel + hairline border + 12px
+// radius) to match the rest of the Home page (DevicesSection,
+// UnseenLogCard). The previous one-sided copper inset border read as
+// asymmetric / "stickered on"; this version uses the same symmetric
+// frame as the other cards with a foliage CTA pill, which keeps the
+// banner in the same visual family as its neighbours. The action is
+// still clearly an update — Download icon + version text carry the
+// signal.
+//
+// The tap target routes the user to /updates rather than triggering
+// the download inline; the Updates page owns the full install flow.
 //
 // The hook is shared with the global AppHeader / Updates page so we
 // do NOT duplicate polling — `useUpdater` debounces refreshes
@@ -56,18 +63,15 @@ export default function UpdatePendingBanner() {
       aria-live="polite"
       className="
         group
-        relative
         flex items-center gap-4
         bg-panel border border-hairline
         rounded-[12px]
-        pl-4 pr-3 py-3
+        px-5 py-4
         no-underline
         transition-colors
+        hover:bg-panel-2 hover:border-hairline-2
       "
       style={{
-        // Copper left edge — the ONE non-green accent the design
-        // system reserves for this pending-update affordance.
-        boxShadow: "inset 2px 0 0 0 var(--sc-copper)",
         transitionDuration: "var(--sc-dur-base)",
         transitionTimingFunction: "var(--sc-ease-out)",
       }}
@@ -79,9 +83,10 @@ export default function UpdatePendingBanner() {
           w-9 h-9
           rounded-[8px]
           flex items-center justify-center
-          text-copper
+          text-foliage
+          border border-[color:var(--sc-foliage)]/25
         "
-        style={{ background: "rgba(213, 130, 88, 0.10)" }}
+        style={{ background: "rgba(39, 193, 107, 0.10)" }}
       >
         <Download size={18} strokeWidth={1.75} />
       </div>
@@ -98,10 +103,11 @@ export default function UpdatePendingBanner() {
       <span
         className="
           shrink-0
+          inline-flex items-center
           sc-chrome text-[10px]
-          text-copper
+          text-foliage
           px-3 py-1.5
-          border border-[color:var(--sc-copper)]/40
+          border border-[color:var(--sc-foliage)]/30
           rounded-[3px]
           transition-colors
         "
