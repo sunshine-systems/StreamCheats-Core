@@ -17,7 +17,7 @@ import {
   UpdaterState,
 } from "../api/updater";
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 60_000;
 
 export interface UpdaterSnapshot {
   state: UpdaterState | null;

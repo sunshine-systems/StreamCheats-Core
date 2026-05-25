@@ -28,11 +28,11 @@ use self::download::{Downloaded, Progress};
 use self::github::Release;
 use self::version::{channel_allowed, parse_tag, Channel};
 
-/// Cadence between automatic update checks. 6 hours keeps the daily
-/// hit count below GitHub's 60 req/hr anonymous quota with massive
-/// headroom, and matches the "background, non-annoying" tone of the
-/// feature.
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// Cadence between automatic update checks. 1 hour gives users
+/// timely visibility of new releases while staying well under
+/// GitHub's 60 req/hr anonymous quota (1 software + 1 firmware
+/// poll/hour = 2 req/hr).
+pub const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Updater state machine. Each variant is what the UI renders. Serde-
 /// serialised as JSON for `GET /api/updates/status`.

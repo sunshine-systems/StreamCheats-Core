@@ -35,10 +35,9 @@ use self::download::{Downloaded, Progress};
 use self::filename::{FirmwareChannel, FirmwareVersion, ParsedFilename};
 use self::github::{Asset, Release};
 
-/// Cadence between automatic firmware-release checks. Same 6h pattern
-/// as the software updater — well below GitHub's anonymous quota and
-/// deliberately "background, non-annoying."
-pub const CHECK_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
+/// Cadence between automatic firmware-release checks. Matches the
+/// software updater at 1 hour.
+pub const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// Default firmware repo when `config.json` omits `firmware.repo`.
 pub const DEFAULT_REPO: &str = "sunshine-systems/Firmware-Teensy-4.1";
