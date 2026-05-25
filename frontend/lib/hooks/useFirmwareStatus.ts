@@ -18,7 +18,7 @@ import {
   type FirmwareState,
 } from "../api/firmware";
 
-const POLL_INTERVAL_MS = 30_000;
+const POLL_INTERVAL_MS = 60_000;
 const ACTIVE_POLL_INTERVAL_MS = 1_000;
 
 export interface FirmwareStatusSnapshot {
