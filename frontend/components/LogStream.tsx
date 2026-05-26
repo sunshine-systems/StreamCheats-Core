@@ -51,10 +51,30 @@ const DEFAULT_LEVELS: LevelToggleSet = {
   TRACE: true,
 };
 
-export default function LogStream() {
+function parseLevels(initial?: readonly string[]): LevelToggleSet {
+  if (!initial || initial.length === 0) return DEFAULT_LEVELS;
+  const allow = new Set(
+    initial.map((l) => l.trim().toUpperCase()).filter(Boolean),
+  );
+  return {
+    ERROR: allow.has("ERROR"),
+    WARN: allow.has("WARN"),
+    INFO: allow.has("INFO"),
+    DEBUG: allow.has("DEBUG"),
+    TRACE: allow.has("TRACE"),
+  };
+}
+
+export default function LogStream({
+  initialLevels,
+}: {
+  initialLevels?: readonly string[];
+} = {}) {
   const stream = useLogStream();
   const [filter, setFilter] = useState("");
-  const [levels, setLevels] = useState<LevelToggleSet>(DEFAULT_LEVELS);
+  const [levels, setLevels] = useState<LevelToggleSet>(() =>
+    parseLevels(initialLevels),
+  );
   const [autoscroll, setAutoscroll] = useState(true);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);

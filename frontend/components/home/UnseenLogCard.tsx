@@ -12,9 +12,35 @@
 
 import { ArrowUpRight } from "lucide-react";
 
+import { getBridge } from "../../lib/api/client";
 import { useUnseenLogSummary } from "../../lib/hooks/useUnseenLogCount";
 import { useRelativeHref } from "../../lib/route/href";
 import Card from "../ui/Card";
+
+/**
+ * Open the dedicated logs window pre-filtered to WARN + ERROR. In
+ * Electron the bridge spawns a BrowserWindow at `/logs/window/?levels=...`;
+ * in a plain browser dev session we fall back to a same-tab navigation
+ * so the link is still useful.
+ */
+async function openLogsFiltered(fallbackHref: string) {
+  const params = "ERROR,WARN";
+  const bridge = getBridge();
+  if (bridge && typeof bridge.openLogsWindow === "function") {
+    try {
+      await bridge.openLogsWindow({ levels: params });
+      return;
+    } catch {
+      /* fall through */
+    }
+  }
+  if (typeof window !== "undefined") {
+    const sep = fallbackHref.includes("?") ? "&" : "?";
+    window.location.href = `${fallbackHref}${sep}levels=${encodeURIComponent(
+      params,
+    )}`;
+  }
+}
 
 function relativeTime(iso: string): string {
   const then = Date.parse(iso);
@@ -39,7 +65,10 @@ function severityTone(level: string): string {
 
 export default function UnseenLogCard() {
   const summary = useUnseenLogSummary(3);
-  const href = useRelativeHref("/logs");
+  const href = useRelativeHref("/logs/window");
+  const onViewAll = () => {
+    void openLogsFiltered(href);
+  };
 
   const hasUnseen = summary.count > 0;
 
@@ -56,8 +85,9 @@ export default function UnseenLogCard() {
           >
             No unseen warnings or errors
           </span>
-          <a
-            href={href}
+          <button
+            type="button"
+            onClick={onViewAll}
             className="
               shrink-0
               inline-flex items-center gap-1.5
@@ -65,8 +95,8 @@ export default function UnseenLogCard() {
               px-2.5 py-1.5
               border border-[color:var(--sc-foliage)]/30
               rounded-[3px]
-              no-underline
               transition-colors
+              cursor-pointer bg-transparent
             "
             style={{
               transitionDuration: "var(--sc-dur-quick)",
@@ -74,7 +104,7 @@ export default function UnseenLogCard() {
           >
             view all
             <ArrowUpRight size={12} strokeWidth={2} aria-hidden="true" />
-          </a>
+          </button>
         </div>
       </Card>
     );
@@ -106,8 +136,9 @@ export default function UnseenLogCard() {
           </span>
         </div>
 
-        <a
-          href={href}
+        <button
+          type="button"
+          onClick={onViewAll}
           className="
             shrink-0
             inline-flex items-center gap-1.5
@@ -115,8 +146,8 @@ export default function UnseenLogCard() {
             px-2.5 py-1.5
             border border-[color:var(--sc-foliage)]/30
             rounded-[3px]
-            no-underline
             transition-colors
+            cursor-pointer bg-transparent
           "
           style={{
             transitionDuration: "var(--sc-dur-quick)",
@@ -124,7 +155,7 @@ export default function UnseenLogCard() {
         >
           view all
           <ArrowUpRight size={12} strokeWidth={2} aria-hidden="true" />
-        </a>
+        </button>
       </div>
 
       <ul className="mt-5 flex flex-col divide-y divide-hairline">

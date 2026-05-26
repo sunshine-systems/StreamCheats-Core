@@ -71,5 +71,5 @@ contextBridge.exposeInMainWorld('streamcheats', {
    *   { ok: false, error?: string }
    * Never throws.
    */
-  openLogsWindow: () => ipcRenderer.invoke('logs-window:open'),
+  openLogsWindow: (opts) => ipcRenderer.invoke('logs-window:open', opts),
 });
