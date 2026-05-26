@@ -86,7 +86,7 @@ let isQuitting = false;
 // the first is alive just focuses the existing window. The reference
 // is nulled in the 'closed' handler so the next click recreates it.
 
-async function createLogsWindow() {
+async function createLogsWindow(opts) {
   if (logsWindow && !logsWindow.isDestroyed()) {
     if (logsWindow.isMinimized()) logsWindow.restore();
     logsWindow.show();
@@ -115,6 +115,13 @@ async function createLogsWindow() {
     loadUrl = `${base}logs/window/`;
   } else {
     loadUrl = target.value;
+  }
+  // Optional `?levels=ERROR,WARN` query forwarded to the LogStream
+  // so deep-links from the home page (or future surfaces) can
+  // preselect a severity filter at mount time.
+  if (opts && typeof opts.levels === 'string' && opts.levels.length > 0) {
+    const sep = loadUrl.includes('?') ? '&' : '?';
+    loadUrl = `${loadUrl}${sep}levels=${encodeURIComponent(opts.levels)}`;
   }
 
   const win = new BrowserWindow({
@@ -158,9 +165,9 @@ async function createLogsWindow() {
   return win;
 }
 
-ipcMain.handle('logs-window:open', async () => {
+ipcMain.handle('logs-window:open', async (_event, opts) => {
   try {
-    await createLogsWindow();
+    await createLogsWindow(opts);
     return { ok: true };
   } catch (err) {
     logger.error(`[logs-window] open failed: ${err && err.message}`);

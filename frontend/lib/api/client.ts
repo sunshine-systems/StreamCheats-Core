@@ -23,9 +23,13 @@ export interface StreamCheatsBridge {
   /**
    * Open (or focus) the dedicated Logs window. Only present when the
    * renderer is loaded inside Electron — absent in a plain `next dev`
-   * browser session.
+   * browser session. Optional `opts.levels` is a comma-separated
+   * severity filter (e.g. "ERROR,WARN") forwarded to the route's
+   * `?levels=` query so callers can deep-link into a pre-filtered view.
    */
-  openLogsWindow?: () => Promise<BridgeOpenLogsWindowResult>;
+  openLogsWindow?: (
+    opts?: { levels?: string },
+  ) => Promise<BridgeOpenLogsWindowResult>;
 }
 
 /** Shape returned by `window.streamcheats.pickHexFile()`. Never throws. */

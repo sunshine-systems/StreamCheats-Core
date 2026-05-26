@@ -36,6 +36,10 @@ export type AppRoute =
   // /updates page focused on newer-versions-available.
   | "/updates/firmware"
   | "/logs"
+  // Dedicated detached-window route for the log viewer. Linked from
+  // the home page's unseen-log card so deep-links can also pre-filter
+  // via `?levels=`.
+  | "/logs/window"
   | "/settings";
 
 const KNOWN_ROUTES: ReadonlyArray<Exclude<AppRoute, "/">> = [
@@ -45,6 +49,7 @@ const KNOWN_ROUTES: ReadonlyArray<Exclude<AppRoute, "/">> = [
   "/updates",
   "/updates/firmware",
   "/logs",
+  "/logs/window",
   "/settings",
 ];
 

@@ -14,7 +14,7 @@
 // badge resets even when the user reads logs from the detached window
 // rather than navigating in-shell.
 
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import LogStream from "../../../components/LogStream";
 import { markLogsSeen } from "../../../lib/hooks/useUnseenLogCount";
@@ -22,6 +22,20 @@ import { markLogsSeen } from "../../../lib/hooks/useUnseenLogCount";
 export default function LogsWindowPage() {
   useEffect(() => {
     markLogsSeen();
+  }, []);
+
+  // Read ?levels=ERROR,WARN once on mount so deep-links from other
+  // surfaces (e.g. the Home unseen-log card) can pre-filter the
+  // viewport. `useSearchParams` would force this page to be dynamic
+  // under Next's static export, so parse window.location directly.
+  const initialLevels = useMemo<readonly string[] | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    const raw = new URLSearchParams(window.location.search).get("levels");
+    if (!raw) return undefined;
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
   }, []);
 
   return (
@@ -52,7 +66,7 @@ export default function LogsWindowPage() {
       </header>
 
       <main className="flex-1 min-h-0 flex flex-col p-4">
-        <LogStream />
+        <LogStream initialLevels={initialLevels} />
       </main>
     </div>
   );
