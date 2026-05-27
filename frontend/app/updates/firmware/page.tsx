@@ -18,7 +18,9 @@
 
 import {
   useCallback,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
 } from "react";
@@ -128,6 +130,35 @@ export default function InstallFirmwarePage() {
     useFirmwareReleases();
   const { experimental } = useUpdater();
 
+  // Bug fix: first-visit empty releases.
+  //
+  // The daemon's release poller staggers 8s after boot before the
+  // first GitHub fetch (firmware/mod.rs::spawn_poller), and the
+  // CHECK_INTERVAL is 1 hour. A user who opens /updates/firmware
+  // during that 8s window — or before the first poll has ever
+  // completed — gets an empty `/api/firmware/releases` and renders
+  // the "no releases" empty state. Backing out and re-entering used
+  // to "fix" it because the poller had populated the cache in the
+  // meantime.
+  //
+  // Kick an explicit /api/firmware/check on mount when the releases
+  // load resolves empty. `check_once` performs the GitHub fetch
+  // synchronously and populates the releases cache before returning,
+  // so the follow-up refreshReleases() will see the populated list.
+  // We only do this once per mount to avoid a hot loop when the
+  // daemon genuinely has no releases (offline / repo misconfigured).
+  const autoCheckedRef = useRef(false);
+  useEffect(() => {
+    if (autoCheckedRef.current) return;
+    if (!releasesLoaded) return;
+    if (releases.length > 0) return;
+    autoCheckedRef.current = true;
+    void (async () => {
+      await runCheck();
+      await refreshReleases();
+    })();
+  }, [releasesLoaded, releases.length, runCheck, refreshReleases]);
+
   const state = status?.state;
   const kind = state?.kind;
   const installedVersion = status?.installed_version ?? null;
@@ -146,8 +177,22 @@ export default function InstallFirmwarePage() {
   const backHref = useRelativeHref("/updates");
 
   // Stepper modal state.
+  //
+  // `attemptKey` bumps on every Flash button click so the modal
+  // remounts with fresh state per attempt. Without this, the modal's
+  // `sawFlashing` latch would survive across clicks and a fresh
+  // confirm-modal opened after a previous flash succeeded would
+  // render the previous DoneStep instead of a Confirm step (Bug 2).
+  // Combined with clearing `intent` on close, this gives every flash
+  // attempt an independent state machine inside the modal.
   const [intent, setIntent] = useState<FlashIntent | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [attemptKey, setAttemptKey] = useState(0);
+  const openFlashIntent = useCallback((next: FlashIntent) => {
+    setIntent(next);
+    setModalOpen(true);
+    setAttemptKey((k) => k + 1);
+  }, []);
 
   const onConfirm = useCallback(async () => {
     if (!intent) return { ok: false as const, reason: "unknown" as const };
@@ -289,36 +334,46 @@ export default function InstallFirmwarePage() {
         experimental={experimental}
         installedVersion={installedVersion}
         flashing={flashing}
-        onFlash={(release) => {
-          setIntent({
+        onFlash={(release) =>
+          openFlashIntent({
             kind: "release",
             version: release.version,
             installed: installedVersion,
             downgrade: isDowngrade(installedVersion, release.version),
-          });
-          setModalOpen(true);
-        }}
+          })
+        }
       />
 
       <ManualFlashCard
         busy={flashing}
-        onFlash={(path) => {
-          setIntent({
+        onFlash={(path) =>
+          openFlashIntent({
             kind: "manual",
             path,
             installed: installedVersion,
             downgrade: false,
-          });
-          setModalOpen(true);
-        }}
+          })
+        }
       />
 
       {intent ? (
         <FlashStepperModal
+          key={attemptKey}
           intent={intent}
           status={status}
           open={modalOpen}
-          onClose={() => setModalOpen(false)}
+          onClose={() => {
+            // Closing the modal after a terminal state (Done /
+            // Failed) should leave the parent in a clean slate so
+            // the next Flash click rebuilds the intent from scratch
+            // and the modal mounts with fresh refs. Without this,
+            // the stale intent + the modal's latched `sawFlashing`
+            // ref could shape the next open's first paint. Clearing
+            // on every close is fine — re-opening always goes
+            // through a Flash button click that resets the intent.
+            setModalOpen(false);
+            setIntent(null);
+          }}
           onRetry={() => setModalOpen(true)}
           onConfirm={onConfirm}
           onDownload={(v) => runDownload(v)}
