@@ -611,13 +611,24 @@ function LevelChip({
   on: boolean;
   onClick: () => void;
 }) {
-  const tone = levelTone(level);
+  // For ON: tint the chip with the level's tone (12% fill + 45% border)
+  // and bolden the label. For OFF: opacity-recede with a neutral
+  // hairline so disabled levels read as visibly inactive — especially
+  // important when the home page deep-links to logs with only ERROR +
+  // WARN preselected, the other three need to look obviously off.
+  const tone = levelTone(level); // CSS var: --sc-danger / --sc-warn / --sc-foliage / --sc-ink-dim
   const style: CSSProperties = on
-    ? { color: tone, borderColor: "var(--sc-hairline-2)" }
+    ? {
+        color: tone,
+        backgroundColor: `color-mix(in srgb, ${tone} 12%, transparent)`,
+        borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`,
+        fontWeight: 600,
+      }
     : {
         color: "var(--sc-ink-dim)",
+        backgroundColor: "transparent",
         borderColor: "var(--sc-hairline)",
-        opacity: 0.55,
+        opacity: 0.45,
       };
   return (
     <button
@@ -627,8 +638,9 @@ function LevelChip({
       title={`Toggle ${level}`}
       className="
         sc-chrome text-[10px]
+        inline-flex items-center gap-1.5
         px-2 py-1 rounded-[4px]
-        bg-substrate-2 border
+        border
         transition-colors
       "
       style={{
@@ -637,6 +649,17 @@ function LevelChip({
         transitionTimingFunction: "var(--sc-ease-out)",
       }}
     >
+      <span
+        aria-hidden="true"
+        className="inline-block rounded-full"
+        style={{
+          width: 6,
+          height: 6,
+          backgroundColor: on ? tone : "transparent",
+          border: on ? "none" : "1.5px solid currentColor",
+          boxSizing: "border-box",
+        }}
+      />
       {level}
     </button>
   );
