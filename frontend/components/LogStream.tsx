@@ -21,14 +21,17 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from "react";
 import {
   ArrowDownToLine,
+  Clock,
   Database,
   Eye,
   Gauge,
   Pause,
   Play,
+  Tag,
   Trash2,
 } from "lucide-react";
 
@@ -50,6 +53,29 @@ const DEFAULT_LEVELS: LevelToggleSet = {
   DEBUG: true,
   TRACE: true,
 };
+
+const LS_SHOW_LEVEL = "sc:logs:showLevel";
+const LS_SHOW_TIMESTAMP = "sc:logs:showTimestamp";
+
+function readBoolPref(key: string, fallback: boolean): boolean {
+  if (typeof window === "undefined") return fallback;
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return fallback;
+    return raw === "1" || raw === "true";
+  } catch {
+    return fallback;
+  }
+}
+
+function writeBoolPref(key: string, value: boolean): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.localStorage.setItem(key, value ? "1" : "0");
+  } catch {
+    /* swallow quota / privacy-mode errors */
+  }
+}
 
 function parseLevels(initial?: readonly string[]): LevelToggleSet {
   if (!initial || initial.length === 0) return DEFAULT_LEVELS;
@@ -76,6 +102,15 @@ export default function LogStream({
     parseLevels(initialLevels),
   );
   const [autoscroll, setAutoscroll] = useState(true);
+  // Column visibility — persisted via localStorage. Lazy initializer
+  // reads once; the LogStream itself is a "use client" island so SSR
+  // produces neutral markup and only the client renders the row body.
+  const [showLevel, setShowLevel] = useState<boolean>(() =>
+    readBoolPref(LS_SHOW_LEVEL, true),
+  );
+  const [showTimestamp, setShowTimestamp] = useState<boolean>(() =>
+    readBoolPref(LS_SHOW_TIMESTAMP, true),
+  );
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
   const userScrolledUpRef = useRef(false);
@@ -126,6 +161,18 @@ export default function LogStream({
           setAutoscroll(next);
           if (next) userScrolledUpRef.current = false;
         }}
+        showLevel={showLevel}
+        onShowLevelToggle={() => {
+          const next = !showLevel;
+          setShowLevel(next);
+          writeBoolPref(LS_SHOW_LEVEL, next);
+        }}
+        showTimestamp={showTimestamp}
+        onShowTimestampToggle={() => {
+          const next = !showTimestamp;
+          setShowTimestamp(next);
+          writeBoolPref(LS_SHOW_TIMESTAMP, next);
+        }}
       />
 
       <FilterBar
@@ -154,16 +201,32 @@ export default function LogStream({
         {visible.length === 0 ? (
           <span className="text-ink-dim">(no events)</span>
         ) : (
-          visible.map((e, i) => <Row key={`${e.ts}-${i}`} event={e} />)
+          visible.map((e, i) => (
+            <Row
+              key={`${e.ts}-${i}`}
+              event={e}
+              showLevel={showLevel}
+              showTimestamp={showTimestamp}
+            />
+          ))
         )}
       </div>
     </section>
   );
 }
 
-function Row({ event }: { event: LogEvent }) {
+function Row({
+  event,
+  showLevel,
+  showTimestamp,
+}: {
+  event: LogEvent;
+  showLevel: boolean;
+  showTimestamp: boolean;
+}) {
   const { prefix, rest } = splitPrefix(event.line);
   const levelColor = levelTone(event.level);
+  const bodyColor = bodyTone(event.level);
   // HH:MM:SS.mmm slice from the ISO timestamp — full ISO is too noisy.
   const ts = event.ts.length >= 23 ? event.ts.substring(11, 23) : event.ts;
   return (
@@ -174,23 +237,74 @@ function Row({ event }: { event: LogEvent }) {
       className="flex gap-2"
       style={{ whiteSpace: "nowrap" }}
     >
-      <span className="text-ink-dim shrink-0">{ts}</span>
-      <span
-        className="shrink-0 sc-chrome text-[10.5px]"
-        style={{ color: levelColor, width: 44, letterSpacing: "0.08em" }}
-      >
-        {event.level.toUpperCase()}
-      </span>
-      <span className="shrink-0">
+      {showTimestamp && (
+        <span className="text-ink-dim shrink-0">{ts}</span>
+      )}
+      {showLevel && (
+        <span
+          className="shrink-0 sc-chrome text-[10.5px]"
+          style={{ color: levelColor, width: 44, letterSpacing: "0.08em" }}
+        >
+          {event.level.toUpperCase()}
+        </span>
+      )}
+      <span className="shrink-0" style={{ color: bodyColor }}>
         {prefix && (
           <span className="text-foliage sc-chrome text-[11px] mr-1">
             {prefix}
           </span>
         )}
-        {rest}
+        {highlightBody(rest)}
       </span>
     </div>
   );
+}
+
+// Subtle per-level body tint. ERROR/WARN rows get a desaturated tint
+// of their severity color so the row reads as that severity at a
+// glance without screaming. INFO/DEBUG/TRACE stay in the neutral
+// muted/dim ink palette so the bulk of the stream stays quiet.
+function bodyTone(level: string): string {
+  switch (level.toUpperCase()) {
+    case "ERROR":
+      // ~75% opacity blend of --sc-danger over substrate-2.
+      return "rgba(196, 106, 106, 0.85)";
+    case "WARN":
+      // ~75% opacity blend of --sc-warn over substrate-2.
+      return "rgba(212, 168, 87, 0.85)";
+    case "INFO":
+      return "var(--sc-ink-muted)";
+    case "DEBUG":
+    case "TRACE":
+    default:
+      return "var(--sc-ink-dim)";
+  }
+}
+
+// Conservative numeric / bracketed-content highlight. We bump runs of
+// digits (and bracketed numbers like "[42]" / "(115200)") up to the
+// brighter --sc-ink so packet counts, ports, and IDs pop out of the
+// body color. Punctuation and bracket characters themselves stay in
+// the body color so we don't paint over the visual rhythm of the line.
+const NUM_RE = /(\d+(?:\.\d+)?)/g;
+
+function highlightBody(text: string): ReactNode {
+  if (!text) return text;
+  const parts: ReactNode[] = [];
+  let lastIdx = 0;
+  let i = 0;
+  for (const m of text.matchAll(NUM_RE)) {
+    const start = m.index ?? 0;
+    if (start > lastIdx) parts.push(text.slice(lastIdx, start));
+    parts.push(
+      <span key={i++} style={{ color: "var(--sc-ink)" }}>
+        {m[0]}
+      </span>,
+    );
+    lastIdx = start + m[0].length;
+  }
+  if (lastIdx < text.length) parts.push(text.slice(lastIdx));
+  return parts;
 }
 
 function levelTone(level: string): string {
@@ -220,6 +334,10 @@ function StatusRow({
   onPauseToggle,
   autoscroll,
   onAutoscrollToggle,
+  showLevel,
+  onShowLevelToggle,
+  showTimestamp,
+  onShowTimestampToggle,
 }: {
   status: LogStreamStatus;
   eventsPerSec: number;
@@ -230,6 +348,10 @@ function StatusRow({
   onPauseToggle: () => void;
   autoscroll: boolean;
   onAutoscrollToggle: () => void;
+  showLevel: boolean;
+  onShowLevelToggle: () => void;
+  showTimestamp: boolean;
+  onShowTimestampToggle: () => void;
 }) {
   const s = statusVisual(status);
   // Compact, single-line row. At 730px CSS the previous layout wrapped
@@ -295,6 +417,18 @@ function StatusRow({
           onClick={onAutoscrollToggle}
           Icon={ArrowDownToLine}
           label={autoscroll ? "Disable autoscroll" : "Enable autoscroll"}
+        />
+        <IconToggle
+          on={showTimestamp}
+          onClick={onShowTimestampToggle}
+          Icon={Clock}
+          label={showTimestamp ? "Hide timestamp" : "Show timestamp"}
+        />
+        <IconToggle
+          on={showLevel}
+          onClick={onShowLevelToggle}
+          Icon={Tag}
+          label={showLevel ? "Hide level" : "Show level"}
         />
       </div>
     </div>
