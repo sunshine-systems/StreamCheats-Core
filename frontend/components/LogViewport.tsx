@@ -13,13 +13,36 @@
 // responsive without a virtual list implementation.
 
 import {
-  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type CSSProperties,
 } from "react";
+
+// Read `?levels=ERROR,WARN` (or similar) from window.location on first
+// render and turn it into a `LevelToggleSet`. Any level not listed in
+// the param is treated as filtered out — that's the whole point of
+// deep-linking a curated subset from the home page. If the param is
+// missing or empty we fall back to "everything on" so existing entry
+// points keep working unchanged.
+function readLevelsFromUrl(): LevelToggleSet | null {
+  if (typeof window === "undefined") return null;
+  const raw = new URLSearchParams(window.location.search).get("levels");
+  if (raw === null) return null;
+  const wanted = new Set(
+    raw
+      .split(",")
+      .map((s) => s.trim().toUpperCase())
+      .filter(Boolean)
+  );
+  if (wanted.size === 0) return null;
+  const next: LevelToggleSet = { ...DEFAULT_LEVELS };
+  for (const lvl of LEVELS) {
+    next[lvl] = wanted.has(lvl);
+  }
+  return next;
+}
 
 import {
   useLogStream,
@@ -42,7 +65,11 @@ const DEFAULT_LEVELS: LevelToggleSet = {
 export default function LogViewport() {
   const stream = useLogStream();
   const [filter, setFilter] = useState("");
-  const [levels, setLevels] = useState<LevelToggleSet>(DEFAULT_LEVELS);
+  // Initialiser runs once on mount — deep-link `?levels=ERROR,WARN`
+  // from the home page lands us with just those two enabled.
+  const [levels, setLevels] = useState<LevelToggleSet>(
+    () => readLevelsFromUrl() ?? DEFAULT_LEVELS
+  );
   const [autoscroll, setAutoscroll] = useState(true);
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
@@ -407,22 +434,54 @@ function LevelToggle({
   on: boolean;
   onClick: () => void;
 }) {
+  // Selected state: tinted bg at low alpha + matching border + tone-
+  // colored text + a small filled dot indicator. ERROR / WARN keep
+  // their danger / warning hues so the chip's role stays legible at
+  // a glance. INFO / DEBUG / TRACE use the accent (foliage) hue.
+  //
+  // Unselected state: half-opacity, neutral border, dim text, no
+  // fill — clearly "off". This makes deep-linking from the home
+  // page with `?levels=ERROR,WARN` read correctly: ERROR + WARN
+  // pop, the other three obviously recede.
   const tone = levelTone(level);
+  const tint = levelTint(level);
   return (
     <button
       type="button"
       onClick={onClick}
       style={{
-        ...pillStyle(on),
-        color: on ? tone : "var(--kx-fg-muted)",
-        borderColor: on ? tone : "var(--kx-border)",
-        background: on ? "transparent" : "var(--kx-surface-2)",
-        opacity: on ? 1 : 0.55,
-        padding: "4px 9px",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 5,
+        padding: "4px 10px",
         fontSize: 11,
+        fontFamily: "var(--kx-font-mono)",
+        letterSpacing: "0.05em",
+        textTransform: "uppercase",
+        color: on ? tone : "var(--kx-fg-muted)",
+        background: on ? tint : "transparent",
+        border: `1px solid ${on ? tone : "var(--kx-border)"}`,
+        borderRadius: "var(--kx-r-pill)",
+        cursor: "pointer",
+        opacity: on ? 1 : 0.5,
+        fontWeight: on ? 600 : 400,
+        transition: "all 160ms var(--kx-ease)",
       }}
       aria-pressed={on}
+      title={on ? `${level} (visible) — click to hide` : `${level} (hidden) — click to show`}
     >
+      <span
+        aria-hidden="true"
+        style={{
+          display: "inline-block",
+          width: 6,
+          height: 6,
+          borderRadius: "50%",
+          background: on ? tone : "transparent",
+          border: on ? "none" : "1px solid var(--kx-fg-muted)",
+          flex: "0 0 auto",
+        }}
+      />
       {level}
     </button>
   );
@@ -439,6 +498,26 @@ function levelTone(level: string): string {
       return "var(--kx-fg-muted)";
     default:
       return "var(--kx-accent)";
+  }
+}
+
+// Background tint that matches the tone color at low alpha. Mirrors
+// the `*-soft` design tokens so the chip blends with the surface
+// palette instead of looking pasted on.
+function levelTint(level: string): string {
+  switch (level.toUpperCase()) {
+    case "ERROR":
+      return "var(--kx-danger-soft)";
+    case "WARN":
+      return "var(--kx-warning-soft)";
+    case "DEBUG":
+    case "TRACE":
+      // No dedicated muted-soft token — use a subtle surface bump so
+      // selected DEBUG / TRACE chips read as "on" without competing
+      // with the accent colors.
+      return "var(--kx-surface-2)";
+    default:
+      return "var(--kx-accent-soft)";
   }
 }
 

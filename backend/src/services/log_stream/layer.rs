@@ -1,120 +1,97 @@
-//! `tracing_subscriber::fmt::Layer` adapter that publishes each event
+//! `tracing_subscriber::Layer` implementation that publishes each event
 //! into the ring + broadcast.
 //!
-//! Rather than implementing `Layer<S>` from scratch and reformatting
-//! events by hand (which would inevitably drift from the stdout / file
-//! layers' format), we piggy-back on the existing `fmt::Layer` by
-//! plugging in a custom `MakeWriter` that returns a per-event capture
-//! buffer. When tracing drops the buffer (end of event formatting), the
-//! buffer's `Drop` impl extracts the bytes, strips ANSI codes, parses
-//! out the level, and pushes a `LogEvent` to both the ring and the
-//! broadcaster.
+//! Unlike the stdout / file layers (which use `fmt::Layer` to format a
+//! full `<RFC3339> <LEVEL> <message>` line), this layer captures *only*
+//! the event's `message` field body. The `LogEvent` wire format already
+//! carries timestamp (`ts`) and `level` as structured fields, so
+//! including them in `line` causes the UI to render the timestamp and
+//! level twice — once from the structured fields and again as a leading
+//! prefix in the message body.
 //!
-//! Why per-event: `MakeWriter::make_writer_for(&Metadata)` is called
-//! once per event, giving us access to the level cheaply (it lives on
-//! the metadata) and isolating one event's bytes into a private buffer.
-//! That avoids the alternative of locking a shared buffer per write
-//! and trying to split-on-newline ourselves.
+//! We implement `Layer<S>` directly (rather than piggy-backing on
+//! `fmt::Layer` + `MakeWriter`) because:
+//!   1. We don't want the timestamp / level prefix at all — fmt's
+//!      "no format" mode still adds them.
+//!   2. We want the level from `Metadata` (a `&'static str`) cheaply,
+//!      without re-parsing it back out of the formatted string.
+//!   3. A bespoke visitor that just snags `message` is ~30 lines and
+//!      avoids dragging `MakeWriter` + a Drop-flushed buffer through
+//!      the hot path.
 
-use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
+use std::fmt::{self, Write as _};
+use std::sync::Arc;
 
-use tracing::Metadata;
-use tracing_subscriber::fmt::MakeWriter;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::layer::Context;
+use tracing_subscriber::Layer;
 
 use super::broadcast::LogBroadcaster;
 use super::event::LogEvent;
 use super::ring::LogRing;
 
-/// Per-event capture buffer. Implements `Write` so `fmt::Layer` can
-/// write its formatted line into it; on `Drop` it flushes the captured
-/// bytes through the ring + broadcast pipeline.
-pub struct CaptureWriter {
-    buf: Vec<u8>,
-    level: String,
+/// `Layer` that captures each event's message body and publishes a
+/// `LogEvent` to the ring + broadcaster.
+pub struct LogStreamLayer {
     ring: Arc<LogRing>,
     broadcaster: LogBroadcaster,
 }
 
-impl Write for CaptureWriter {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        self.buf.extend_from_slice(data);
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
+impl LogStreamLayer {
+    pub fn new(ring: Arc<LogRing>, broadcaster: LogBroadcaster) -> Self {
+        Self { ring, broadcaster }
     }
 }
 
-impl Drop for CaptureWriter {
-    fn drop(&mut self) {
-        if self.buf.is_empty() {
+impl<S: Subscriber> Layer<S> for LogStreamLayer {
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+        if visitor.message.is_empty() {
+            // No message field — nothing meaningful to surface in the UI.
             return;
         }
-        // The formatter ends each event with a newline; trim it so the
-        // wire-form line doesn't double-newline in the UI.
-        let mut line = String::from_utf8_lossy(&self.buf).into_owned();
-        if line.ends_with('\n') {
-            line.pop();
-            if line.ends_with('\r') {
-                line.pop();
-            }
-        }
-        let line = strip_ansi(&line);
-        let event = LogEvent::new(&self.level, line);
-        self.ring.push(event.clone());
-        self.broadcaster.publish(event);
+        let level = event.metadata().level().as_str();
+        let line = strip_ansi(&visitor.message);
+        let log_event = LogEvent::new(level, line);
+        self.ring.push(log_event.clone());
+        self.broadcaster.publish(log_event);
     }
 }
 
-/// `MakeWriter` factory that hands out fresh `CaptureWriter`s.
-#[derive(Clone)]
-pub struct LogStreamWriter {
-    ring: Arc<LogRing>,
-    broadcaster: LogBroadcaster,
-    // Per-event level captured via `make_writer_for`. Stashed on the
-    // writer itself when constructed so `Drop` can attach it to the
-    // event without re-parsing the formatted line.
-    pending_level: Arc<Mutex<&'static str>>,
+/// Visits an event's fields and concatenates the `message` field (the
+/// formatted body of `tracing::info!("…")` / friends) into a string.
+///
+/// Non-`message` fields are intentionally ignored: the daemon doesn't
+/// emit structured key/value pairs today, and surfacing them inline
+/// would re-introduce noise the UI isn't prepared to render.
+#[derive(Default)]
+struct MessageVisitor {
+    message: String,
 }
 
-impl LogStreamWriter {
-    pub fn new(ring: Arc<LogRing>, broadcaster: LogBroadcaster) -> Self {
-        Self {
-            ring,
-            broadcaster,
-            pending_level: Arc::new(Mutex::new("INFO")),
-        }
-    }
-}
-
-impl<'a> MakeWriter<'a> for LogStreamWriter {
-    type Writer = CaptureWriter;
-
-    fn make_writer(&'a self) -> Self::Writer {
-        CaptureWriter {
-            buf: Vec::with_capacity(256),
-            level: (*self.pending_level.lock().unwrap()).to_string(),
-            ring: self.ring.clone(),
-            broadcaster: self.broadcaster.clone(),
+impl Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        if field.name() == "message" {
+            // `Debug` formatting of `format_args!` output yields the
+            // plain string with no surrounding quoting, which is what
+            // we want.
+            let _ = write!(&mut self.message, "{value:?}");
         }
     }
 
-    fn make_writer_for(&'a self, meta: &Metadata<'_>) -> Self::Writer {
-        CaptureWriter {
-            buf: Vec::with_capacity(256),
-            level: meta.level().to_string(),
-            ring: self.ring.clone(),
-            broadcaster: self.broadcaster.clone(),
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "message" {
+            self.message.push_str(value);
         }
     }
 }
 
-/// Strip ANSI CSI escape sequences (`ESC [ ... m` and friends). We
-/// configure the fmt layer with `with_ansi(false)` so this should be a
-/// no-op in practice, but the strip is cheap insurance against a
-/// future change that flips colors back on.
+/// Strip ANSI CSI escape sequences (`ESC [ ... m` and friends). The
+/// daemon's macros shouldn't emit them, but the strip is cheap
+/// insurance against a future caller that pipes pre-colorized text
+/// through `tracing::info!`.
 fn strip_ansi(input: &str) -> String {
     let bytes = input.as_bytes();
     let mut out = String::with_capacity(bytes.len());
@@ -145,6 +122,7 @@ fn strip_ansi(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_subscriber::layer::SubscriberExt;
 
     #[test]
     fn strip_ansi_removes_csi_sequences() {
@@ -159,34 +137,41 @@ mod tests {
     }
 
     #[test]
-    fn capture_writer_publishes_on_drop() {
+    fn layer_captures_message_only_no_ts_or_level_prefix() {
         let ring = Arc::new(LogRing::new(10));
         let bc = LogBroadcaster::new();
-        let mut w = CaptureWriter {
-            buf: Vec::new(),
-            level: "INFO".into(),
-            ring: ring.clone(),
-            broadcaster: bc.clone(),
-        };
-        write!(w, "hello world\n").unwrap();
-        drop(w);
+        let layer = LogStreamLayer::new(ring.clone(), bc.clone());
+        let mut rx = bc.subscribe();
+
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!("STATE: starting up");
+        });
+
+        let ev = rx.try_recv().expect("event");
+        // Stream-bound `line` must be just the message body — no
+        // leading RFC-3339 timestamp, no leading level token.
+        assert_eq!(ev.line, "STATE: starting up");
+        assert_eq!(ev.level, "INFO");
+        // Defensive: explicitly check we don't accidentally start with
+        // a 4-digit year (RFC 3339) or one of the level tokens. This
+        // is the exact regression the fix targets.
+        assert!(
+            !ev.line.starts_with(|c: char| c.is_ascii_digit()),
+            "line should not start with a digit: {:?}",
+            ev.line
+        );
+        for tok in ["TRACE ", "DEBUG ", "INFO ", "WARN ", "ERROR "] {
+            assert!(
+                !ev.line.starts_with(tok),
+                "line should not start with level token {tok:?}: {:?}",
+                ev.line
+            );
+        }
+
         let snap = ring.snapshot();
         assert_eq!(snap.len(), 1);
-        assert_eq!(snap[0].line, "hello world");
-        assert_eq!(snap[0].level, "INFO");
-    }
-
-    #[test]
-    fn capture_writer_drops_empty_silently() {
-        let ring = Arc::new(LogRing::new(10));
-        let bc = LogBroadcaster::new();
-        let w = CaptureWriter {
-            buf: Vec::new(),
-            level: "INFO".into(),
-            ring: ring.clone(),
-            broadcaster: bc,
-        };
-        drop(w);
-        assert_eq!(ring.len(), 0);
+        assert_eq!(snap[0].line, "STATE: starting up");
     }
 }

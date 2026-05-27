@@ -1,8 +1,8 @@
 //! Real-time log streaming.
 //!
-//! Provides a tracing subscriber layer that captures every formatted
-//! log event into both a bounded ring buffer (for replay-on-connect)
-//! and a tokio broadcast channel (for live fan-out). The HTTP layer's
+//! Provides a tracing subscriber layer that captures every event into
+//! both a bounded ring buffer (for replay-on-connect) and a tokio
+//! broadcast channel (for live fan-out). The HTTP layer's
 //! `/logs/stream` WebSocket route consumes those handles.
 //!
 //! # Wire-up sketch
@@ -14,18 +14,19 @@
 //! // subscribe to the broadcast.
 //! ```
 //!
-//! # Format consistency
+//! # Format intent
 //!
-//! The layer is built on top of `tracing_subscriber::fmt::Layer` with a
-//! custom `MakeWriter` that buffers per-event bytes and pushes them
-//! through on `Drop`. The fmt configuration matches the stdout and file
-//! layers (no target, no ANSI), so each line emitted onto the WS is
-//! byte-identical (sans trailing newline) to what's written to disk.
+//! Unlike the stdout / file layers (which use `fmt::Layer` to write a
+//! full `<RFC3339> <LEVEL> <message>` line), the stream layer captures
+//! *only* the event's `message` body. The `LogEvent` wire format
+//! already carries timestamp and level as structured fields (`ts` /
+//! `level`), so including them in `line` causes the UI to render them
+//! twice — once from the structured fields and again as a leading
+//! prefix in the message body. Keep the stream-bound line
+//! message-only; let the file appender keep the full prefixed format.
 
 use std::sync::Arc;
 
-use tracing_subscriber::fmt::format::DefaultFields;
-use tracing_subscriber::fmt::Layer as FmtLayer;
 use tracing_subscriber::{EnvFilter, Layer};
 
 pub mod broadcast;
@@ -55,22 +56,15 @@ pub fn build() -> (
 ) {
     let ring = Arc::new(LogRing::new(ring::DEFAULT_CAPACITY));
     let broadcaster = LogBroadcaster::new();
-    let writer = layer::LogStreamWriter::new(ring.clone(), broadcaster.clone());
+    let layer = layer::LogStreamLayer::new(ring.clone(), broadcaster.clone());
 
-    // Match the stdout + file layer config so the captured line is the
-    // same byte-for-byte: no target, no ANSI. The per-layer EnvFilter
-    // (`info` default, overridable via RUST_LOG) mirrors the stdout/
-    // file layers — without it the global registry would feed us every
-    // TRACE event from `tungstenite`, `hyper`, etc., and the WS would
-    // become an unreadable firehose of crate-internal chatter.
-    let fmt_layer: FmtLayer<tracing_subscriber::Registry, DefaultFields, _, _> =
-        tracing_subscriber::fmt::layer()
-            .with_target(false)
-            .with_ansi(false)
-            .with_writer(writer);
-    let filter =
-        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let filtered = fmt_layer.with_filter(filter);
+    // Per-layer EnvFilter (`info` default, overridable via RUST_LOG)
+    // mirrors the stdout / file layers — without it the global registry
+    // would feed us every TRACE event from `tungstenite`, `hyper`, etc.,
+    // and the WS would become an unreadable firehose of crate-internal
+    // chatter.
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let filtered = layer.with_filter(filter);
 
     let boxed: Box<dyn Layer<tracing_subscriber::Registry> + Send + Sync> = Box::new(filtered);
     let handles = LogStreamHandles { ring, broadcaster };
@@ -89,10 +83,6 @@ mod tests {
 
         // Dedicated dispatcher scoped to this test — no `init()` so we
         // don't poison the process-global subscriber for sibling tests.
-        // Composing a `Box<dyn Layer<Registry>>` over a plain registry
-        // works because the registry doesn't change shape (no
-        // EnvFilter on top); add a filter inline if you need to scope
-        // levels in future.
         let subscriber = tracing_subscriber::registry().with(layer);
         let dispatch = tracing::Dispatch::new(subscriber);
         tracing::dispatcher::with_default(&dispatch, || {
@@ -100,15 +90,61 @@ mod tests {
             tracing::warn!("something amiss");
         });
 
-        // Buffered writers flushed on drop above. Drain the broadcast.
         let first = rx.try_recv().expect("first event");
         let second = rx.try_recv().expect("second event");
-        assert!(first.line.contains("hello from test"));
+        // Stream-bound `line` carries the message body only — no
+        // RFC-3339 timestamp prefix, no level prefix. The structured
+        // `ts` / `level` fields on `LogEvent` are the source of truth.
+        assert_eq!(first.line, "hello from test");
         assert_eq!(first.level, "INFO");
-        assert!(second.line.contains("something amiss"));
+        assert_eq!(second.line, "something amiss");
         assert_eq!(second.level, "WARN");
 
         let snap = handles.ring.snapshot();
         assert_eq!(snap.len(), 2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn streamed_line_does_not_start_with_timestamp_or_level() {
+        // Regression guard for the duplicate-ts-and-level bug. The
+        // stream layer must not prefix the message with a timestamp or
+        // a level token — those live on the structured `ts` / `level`
+        // fields of `LogEvent` and the UI renders them as separate
+        // columns.
+        let (layer, handles) = build();
+        let mut rx = handles.broadcaster.subscribe();
+
+        let subscriber = tracing_subscriber::registry().with(layer);
+        let dispatch = tracing::Dispatch::new(subscriber);
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info!("STATE: connected");
+            tracing::warn!("OUT (COM3): packet rejected");
+            tracing::error!("disk full");
+        });
+
+        for _ in 0..3 {
+            let ev = rx.try_recv().expect("event");
+            assert!(
+                !ev.line.starts_with(|c: char| c.is_ascii_digit()),
+                "line must not start with a digit (would be RFC-3339 ts): {:?}",
+                ev.line
+            );
+            for tok in ["TRACE ", "DEBUG ", "INFO ", "WARN ", "ERROR "] {
+                assert!(
+                    !ev.line.starts_with(tok),
+                    "line must not start with level token {tok:?}: {:?}",
+                    ev.line
+                );
+            }
+        }
+
+        // Ring snapshot mirrors the broadcast — same invariant.
+        for ev in handles.ring.snapshot() {
+            assert!(
+                !ev.line.starts_with(|c: char| c.is_ascii_digit()),
+                "ring line must not start with digit: {:?}",
+                ev.line
+            );
+        }
     }
 }
