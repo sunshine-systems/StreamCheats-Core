@@ -26,7 +26,7 @@
 // "Flash tool missing — please reinstall" error and disables the
 // flash button instead of trying to fetch anything.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
 import {
   AlertTriangle,
   Check,
@@ -124,15 +124,37 @@ export default function FlashStepperModal({
   // modal on a release that's already downloaded — we want them to
   // explicitly confirm).
   const awaitingReadyForFlashRef = useRef(false);
-  // Reset chain state whenever the intent changes — a fresh release
-  // pick from the releases list shouldn't inherit "we just downloaded"
-  // bookkeeping from a previous attempt.
-  useEffect(() => {
-    awaitingReadyForFlashRef.current = false;
-  }, [intent]);
-
   const kind = status?.state.kind;
   const stateLatest = status?.state.latest;
+
+  // Track whether THIS attempt observed a `Flashing` transition. The
+  // daemon's resting state after a successful flash is `UpToDate` —
+  // and that's *also* the resting state with no flash ever attempted.
+  // Routing DoneStep purely off `kind === "up_to_date"` (the previous
+  // behaviour) pinned the modal to "Flash complete." forever: opening
+  // a fresh Confirm modal on any release after a successful flash
+  // would land on Done instead. We only show Done when we've actually
+  // *observed* this attempt going through `Flashing`.
+  //
+  // The parent mounts a fresh FlashStepperModal per attempt (via a
+  // `key` prop bumped on every Flash click in the /updates/firmware
+  // page), so this state always starts fresh for every attempt — no
+  // need for intent-change reset bookkeeping inside the component.
+  // We don't need to trigger a re-render on the false→true latch
+  // transition: status polling (which already triggers re-renders via
+  // the parent's useFirmwareStatus hook) will re-render us within a
+  // second, and the latch will be read on that render. Using a ref
+  // here would trip the `react-hooks/refs` lint rule (refs aren't
+  // allowed during render); using state + setState-in-effect trips
+  // `react-hooks/set-state-in-effect`. useReducer with a dispatch
+  // from an effect threads the needle.
+  const [sawFlashing, latchFlashing] = useReducer(
+    (prev: boolean) => prev || true,
+    false
+  );
+  useEffect(() => {
+    if (kind === "flashing") latchFlashing();
+  }, [kind]);
   // Auto-advance: when we've started a download for this version and
   // the daemon flips to `Ready { latest: <version> }`, fire the flash
   // automatically. The modal's step routing will then switch into the
@@ -176,6 +198,7 @@ export default function FlashStepperModal({
         <StepBody
           intent={intent}
           status={status}
+          sawFlashing={sawFlashing}
           onClose={onClose}
           onRetry={onRetry}
           onConfirm={onConfirm}
@@ -196,6 +219,14 @@ export default function FlashStepperModal({
 function StepBody(props: {
   intent: FlashIntent;
   status: FirmwareStatusResponse | null;
+  /**
+   * True once the parent observed `kind === "flashing"` during the
+   * current attempt. Disambiguates "post-flash UpToDate (Done)" from
+   * "resting UpToDate (fresh open after a previous flash succeeded)".
+   * Without this, opening the modal on any release after a successful
+   * flash would render DoneStep instead of Confirm.
+   */
+  sawFlashing: boolean;
   onClose: () => void;
   onRetry: () => void;
   onConfirm: () => Promise<FlashResult>;
@@ -255,11 +286,11 @@ function StepBody(props: {
     );
   }
   // up_to_date is ambiguous: it's the resting state AND the
-  // post-success state. The parent passes a "just-flashed" hint via a
-  // separate prop in the future if we want a celebratory toast — for
-  // now, if the user got here AND the page is showing up_to_date, the
-  // most useful behaviour is to show success copy.
-  if (kind === "up_to_date") {
+  // post-success state. Only treat it as terminal Done when the
+  // parent observed `kind === "flashing"` during this attempt — that
+  // way a fresh open on a release row after a previous successful
+  // flash lands on the Confirm step, not a stuck Done step.
+  if (kind === "up_to_date" && props.sawFlashing) {
     return <DoneStep onClose={props.onClose} />;
   }
   // Default: confirm step.

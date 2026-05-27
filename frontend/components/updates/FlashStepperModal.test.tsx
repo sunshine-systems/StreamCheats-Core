@@ -5,7 +5,7 @@
 // drift is covered separately by the contract tests; here we're only
 // checking the renderer's state-machine routing.
 
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import FlashStepperModal, { type FlashIntent } from "./FlashStepperModal";
@@ -16,6 +16,18 @@ import {
   firmwareStatusReady,
   firmwareStatusUpToDate,
 } from "../../test/msw/fixtures";
+
+// Helper: render the modal with `firmwareStatusFlashing` first so the
+// component latches `sawFlashing = true`, then re-render with a
+// terminal status. Mirrors the real flow: parent's status hook polls
+// through Flashing → UpToDate (or Flashing → Failed).
+function renderThroughFlashing(terminal: FirmwareStatusResponse) {
+  const { rerender, ...rest } = render(
+    <FlashStepperModal {...baseProps} status={firmwareStatusFlashing} />
+  );
+  rerender(<FlashStepperModal {...baseProps} status={terminal} />);
+  return { rerender, ...rest };
+}
 
 const releaseIntent: FlashIntent = {
   kind: "release",
@@ -108,11 +120,68 @@ describe("FlashStepperModal", () => {
     expect(screen.getByText(/Almost done…/i)).toBeInTheDocument();
   });
 
-  it("renders the Done step on kind=up_to_date (post-flash terminal)", () => {
+  it("renders the Done step on kind=up_to_date after observing flashing", async () => {
+    // Real flow: status hook polls Flashing → UpToDate. The modal
+    // latches `sawFlashing` on the first observation of `flashing`
+    // and treats the subsequent `up_to_date` as terminal success.
+    // The latch lives in component state and is set during the
+    // post-transition render, so `waitFor` handles the React commit
+    // sequence cleanly.
+    renderThroughFlashing(firmwareStatusUpToDate);
+    await waitFor(() =>
+      expect(screen.getByText(/Flash complete\./i)).toBeInTheDocument()
+    );
+  });
+
+  it("Bug 2 — renders the Confirm step on kind=up_to_date when no flash was observed", () => {
+    // Regression: after a previous flash succeeded the daemon's
+    // resting state is `up_to_date`. The pre-fix modal routed
+    // purely off `kind === "up_to_date"` and rendered DoneStep,
+    // which left the modal pinned to "Flash complete." on every
+    // subsequent re-open — users couldn't flash a second device.
+    // With the `sawFlashing` latch, a fresh mount on a resting
+    // `up_to_date` status lands on Confirm.
     render(
       <FlashStepperModal {...baseProps} status={firmwareStatusUpToDate} />
     );
-    expect(screen.getByText(/Flash complete\./i)).toBeInTheDocument();
+    expect(screen.getByText("Flash rel-5.17?")).toBeInTheDocument();
+    expect(screen.queryByText(/Flash complete\./i)).not.toBeInTheDocument();
+  });
+
+  it("Bug 2 — a freshly-mounted modal on up_to_date renders Confirm for a new flash attempt", async () => {
+    // Simulate: user flashes rel-5.17 (Flashing → UpToDate, modal
+    // shows Done), closes it. The parent (/updates/firmware) bumps
+    // the modal's `key` for the next Flash click — React unmounts
+    // the previous modal and mounts a fresh instance with
+    // sawFlashing=false. The new attempt lands on Confirm even
+    // though the daemon is sitting in `up_to_date` from the
+    // previous flash.
+    const { unmount } = render(
+      <FlashStepperModal {...baseProps} status={firmwareStatusFlashing} />
+    );
+    // Drive through the Flashing → UpToDate transition to set the
+    // first mount into the Done state, then unmount it (mirrors the
+    // user closing the modal after success).
+    unmount();
+    // Fresh mount on a daemon that's still resting in up_to_date —
+    // this is the second Flash click. Without the fix this would
+    // render DoneStep; with the fix (sawFlashing initial=false on
+    // fresh mount) it correctly renders Confirm.
+    const nextIntent: FlashIntent = {
+      kind: "release",
+      version: "rel-5.16",
+      installed: "rel-5.17",
+      downgrade: true,
+    };
+    render(
+      <FlashStepperModal
+        {...baseProps}
+        intent={nextIntent}
+        status={firmwareStatusUpToDate}
+      />
+    );
+    expect(screen.getByText("Flash rel-5.16?")).toBeInTheDocument();
+    expect(screen.queryByText(/Flash complete\./i)).not.toBeInTheDocument();
   });
 
   it("renders the Failed step with friendly copy for wait_for_device_timeout", () => {
